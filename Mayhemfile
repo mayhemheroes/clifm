@@ -1,0 +1,5 @@
+project: rnshah9/clifm
+target: clifm
+
+cmds:
+  - cmd: /repo/build/clifm --list-and-quit -c @@

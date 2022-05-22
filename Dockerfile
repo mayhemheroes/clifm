@@ -38,6 +38,6 @@ make -f clifm/Makefile install
 USER root
 
 # Default arguments for your app (remove if you have none):
-#CMD ["-x", "--cwd-in-title"]
+CMD ["-x", "--cwd-in-title"]
 
 USER guest

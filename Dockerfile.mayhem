@@ -1,0 +1,10 @@
+FROM --platform=linux/amd64 ubuntu:20.04
+
+RUN apt-get update
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y git coreutils libcap-dev libacl1-dev libreadline-dev libmagic-dev cmake build-essential
+
+
+ADD . /repo
+WORKDIR /repo/build
+RUN cmake ..
+RUN make -j8
