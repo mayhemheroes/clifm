@@ -1,0 +1,5 @@
+project: clifm
+target: clifm
+
+cmds:
+  - cmd: /install/bin/clifm --list-and-quit -c @@
