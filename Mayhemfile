@@ -2,4 +2,4 @@ project: clifm
 target: clifm
 
 cmds:
-  - cmd: /repo/build/clifm --list-and-quit -c @@
+  - cmd: /clifm --list-and-quit -c @@
