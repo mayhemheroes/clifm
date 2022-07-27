@@ -2,4 +2,4 @@ project: clifm
 target: clifm
 
 cmds:
-  - cmd: /clifm --list-and-quit -c @@
+  - cmd: /install/bin/clifm --list-and-quit -c @@
