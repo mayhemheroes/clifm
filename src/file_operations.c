@@ -53,8 +53,14 @@
 #include "selection.h"
 #include "messages.h"
 
-#define BULK_RM_TMP_FILE_HEADER "# Remove the files you want to be \
-deleted, save and exit\n# Close the editor to cancel the operation\n\n"
+#define BULK_RENAME_TMP_FILE_HEADER "# CliFM - Rename files in bulk\n\
+# Edit file names, save, and quit the editor (you will be\n\
+# asked for confirmation)\n\
+# Just quit the editor without any edit to cancel the operation\n\n"
+
+#define BULK_RM_TMP_FILE_HEADER "# CliFM - Remove files in bulk\n\
+# Remove the files you want to be deleted, save and exit\n\
+# Just quit the editor without any edit to cancel the operation\n\n"
 
 static char
 ask_user_y_or_n(const char *msg, char default_answer)
@@ -105,7 +111,7 @@ parse_bulk_remove_params(char *s1, char *s2, char **app, char **target)
 		char *p = get_cmd_path(s1);
 		if (!p) { /* S1 is neither a directory nor a valid application */
 			int ec = stat_ret != -1 ? ENOTDIR : ENOENT;
-			fprintf(stderr, _("%s: %s: %s\n"), PROGRAM_NAME, s1, strerror(ec));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "rr: %s: %s\n", s1, strerror(ec));
 			return ec;
 		}
 		/* S1 is an application name. TARGET defaults to CWD */
@@ -131,27 +137,21 @@ parse_bulk_remove_params(char *s1, char *s2, char **app, char **target)
 		return EXIT_SUCCESS;
 	}
 	/* S2 is not a valid application name */
-	fprintf(stderr, _("%s: %s: %s\n"), PROGRAM_NAME, s2, strerror(ENOENT));
+	_err(ERR_NO_STORE, NOPRINT_PROMPT, "rr: %s: %s\n", s2, strerror(ENOENT));
 	return ENOENT;
 }
 
 static int
 create_tmp_file(char **file, int *fd)
 {
-	if (xargs.stealth_mode == 1) {
-		*file = (char *)xnmalloc(strlen(P_tmpdir) + strlen(TMP_FILENAME)
-		        + 2, sizeof(char));
-		sprintf(*file, "%s/%s", P_tmpdir, TMP_FILENAME);
-	} else {
-		*file = (char *)xnmalloc(strlen(tmp_dir) + strlen(TMP_FILENAME)
-		        + 2, sizeof(char));
-		sprintf(*file, "%s/%s", tmp_dir, TMP_FILENAME);
-	}
+	size_t tmp_len = strlen(xargs.stealth_mode == 1 ? P_tmpdir : tmp_dir);
+	*file = (char *)xnmalloc(tmp_len + strlen(TMP_FILENAME) + 2, sizeof(char));
+	sprintf(*file, "%s/%s", xargs.stealth_mode == 1 ? P_tmpdir : tmp_dir, TMP_FILENAME);
 
 	errno = 0;
 	*fd = mkstemp(*file);
 	if (*fd == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, *file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "rr: mkstemp: %s: %s\n", *file, strerror(errno));
 		free(*file);
 		return EXIT_FAILURE;
 	}
@@ -177,6 +177,7 @@ static void
 print_file(FILE *fp, char *name, mode_t type)
 {
 #ifndef _DIRENT_HAVE_D_TYPE
+	UNUSED(type);
 	char s = 0;
 	struct stat a;
 	if (lstat(name, &a) != -1)
@@ -195,7 +196,7 @@ write_files_to_tmp(struct dirent ***a, int *n, const char *target, const char *t
 {
 	FILE *fp = fopen(tmp_file, "w");
 	if (!fp) {
-		_err('e', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, tmp_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "%s: rr: fopen: %s: %s\n", PROGRAM_NAME, tmp_file, strerror(errno));
 		return errno;
 	}
 
@@ -216,7 +217,7 @@ write_files_to_tmp(struct dirent ***a, int *n, const char *target, const char *t
 		if (*n == -1) {
 			fclose(fp);
 			unlink(tmp_file);
-			fprintf(stderr, "%s: %s: %s", PROGRAM_NAME, target, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "rr: %s: %s", target, strerror(errno));
 			return errno;
 		}
 		for (i = 0; i < (size_t)*n; i++) {
@@ -240,9 +241,6 @@ write_files_to_tmp(struct dirent ***a, int *n, const char *target, const char *t
 static int
 open_tmp_file(struct dirent ***a, int n, char *tmp_file, char *app)
 {
-	if (!*a)
-		return EXIT_FAILURE;
-
 	if (!app || !*app) {
 		open_in_foreground = 1;
 		int exit_status = open_file(tmp_file);
@@ -251,14 +249,13 @@ open_tmp_file(struct dirent ***a, int n, char *tmp_file, char *app)
 		if (exit_status == EXIT_SUCCESS)
 			return EXIT_SUCCESS;
 
-		fprintf(stderr, _("%s: %s: Cannot open file\n"), PROGRAM_NAME, tmp_file);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("rr: %s: Cannot open file\n"), tmp_file);
 		if (unlink(tmp_file) == -1) {
-			_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-				tmp_file, strerror(errno));
+			_err('e', PRINT_PROMPT, "rr: unlink: %s: %s\n",	tmp_file, strerror(errno));
 		}
 
 		size_t i;
-		for (i = 0; i < (size_t)n; i++)
+		for (i = 0; i < (size_t)n && *a && (*a)[i]; i++)
 			free((*a)[i]);
 		free(*a);
 		return exit_status;
@@ -271,12 +268,12 @@ open_tmp_file(struct dirent ***a, int n, char *tmp_file, char *app)
 		return EXIT_SUCCESS;
 
 	if (unlink(tmp_file) == -1) {
-		_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
+		_err('e', PRINT_PROMPT, "%s: rr: unlink: %s: %s\n", PROGRAM_NAME,
 			tmp_file, strerror(errno));
 	}
 
 	size_t i;
-	for (i = 0; i < (size_t)n; i++)
+	for (i = 0; i < (size_t)n && *a && (*a)[i]; i++)
 		free((*a)[i]);
 	free(*a);
 	return exit_status;
@@ -385,21 +382,21 @@ get_rm_param(char ***rfiles, int n)
 			continue;
 
 		if (S_ISDIR(attr.st_mode)) {
-#if defined(__NetBSD__) || defined(__OpenBSD__)
+#if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__) || defined(_BE_POSIX)
 			_param = savestring("-r", 2);
-#else
+#else /* Linux and FreeBSD only */
 			_param = savestring("-dIr", 4);
-#endif
+#endif /* __NetBSD__ || __OpenBSD__ || __APPLE__ || _BE_POSIX */
 			break;
 		}
 	}
 
 	if (!_param) {
-#if defined(__NetBSD__) || defined(__OpenBSD__)
+#if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__) || defined(_BE_POSIX)
 		_param = savestring("-f", 2);
-#else
+#else /* Linux and FreeBSD only */
 		_param = savestring("-I", 2);
-#endif
+#endif /* __NetBSD__ || __OpenBSD__ || __APPLE__ || _BE_POSIX */
 	}
 
 	return _param;
@@ -486,7 +483,7 @@ diff_files(char *tmp_file, int n)
 static int
 nothing_to_do(char **tmp_file, struct dirent ***a, int n)
 {
-	printf(_("%s: Nothing to do\n"), PROGRAM_NAME);
+	printf(_("rr: Nothing to do\n"));
 	unlink(*tmp_file);
 	free(*tmp_file);
 
@@ -543,7 +540,8 @@ bulk_remove(char *s1, char *s2)
 	return ret;
 }
 
-static inline int
+#ifndef _NO_LIRA
+static int
 run_mime(char *file)
 {
 	if (!file || !*file)
@@ -568,6 +566,7 @@ run_mime(char *file)
 	char *cmd[] = {"mm", file, NULL};
 	return mime_open(cmd);
 }
+#endif /* _NO_LIRA */
 
 /* Open a file via OPENER, if set, or via LIRA. If not compiled with
  * Lira support, fallback to open (Haiku), or xdg-open. Returns zero
@@ -595,13 +594,13 @@ open_file(char *file)
 		exit_status = run_mime(file);
 #else
 		/* Fallback to (xdg-)open */
-#if defined(__HAIKU__)
+# if defined(__HAIKU__)
 		char *cmd[] = {"open", file, NULL};
-#elif defined(__APPLE__)
+# elif defined(__APPLE__)
 		char *cmd[] = {"/usr/bin/open", file, NULL};
-#else
+# else
 		char *cmd[] = {"xdg-open", file, NULL};
-#endif /* __HAIKU__ */
+# endif /* __HAIKU__ */
 		if (launch_execve(cmd, FOREGROUND, E_NOSTDERR) != EXIT_SUCCESS)
 			exit_status = EXIT_FAILURE;
 #endif /* _NO_LIRA */
@@ -610,9 +609,39 @@ open_file(char *file)
 	return exit_status;
 }
 
+int
+xchmod(const char *file, const char *mode_str)
+{
+	if (!file || !*file) {
+		_err('e', PRINT_PROMPT, "xchmod: Empty buffer for file name\n");
+		return EXIT_FAILURE;
+	}
+
+	if (!mode_str || !*mode_str) {
+		_err('e', PRINT_PROMPT, "xchmod: Empty buffer for mode\n");
+		return EXIT_FAILURE;
+	}
+
+	int fd = open(file, O_RDONLY);
+	if (fd == -1) {
+		_err('e', PRINT_PROMPT, "xchmod: %s: %s\n", file, strerror(errno));
+		return errno;
+	}
+
+	mode_t mode = (mode_t)strtol(mode_str, 0, 8);
+	if (fchmod(fd, mode) == -1) {
+		close(fd);
+		_err('e', PRINT_PROMPT, "xchmod: %s: %s\n", file, strerror(errno));
+		return errno;
+	}
+
+	close(fd);
+	return EXIT_SUCCESS;
+}
+
 /* Toggle executable bit on file */
 int
-xchmod(const char *file, mode_t mode)
+toggle_exec(const char *file, mode_t mode)
 {
 	/* Set or unset S_IXUSR, S_IXGRP, and S_IXOTH */
 	(0100 & mode) ? (mode &= (mode_t)~0111) : (mode |= 0111);
@@ -621,13 +650,13 @@ xchmod(const char *file, mode_t mode)
 
 	int fd = open(file, O_WRONLY);
 	if (fd == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "xchmod: %s: %s\n", file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	if (fchmod(fd, mode) == -1) {
 		close(fd);
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "xchmod: %s: %s\n", file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -636,12 +665,52 @@ xchmod(const char *file, mode_t mode)
 	return EXIT_SUCCESS;
 }
 
+static char *
+get_dup_file_dest_dir(void)
+{
+	char *dir = (char *)NULL;
+
+	puts("Enter '.' for current directory ('q' to quit)");
+	while (!dir) {
+		dir = rl_no_hist("Destiny directory: ");
+		if (!dir)
+			continue;
+		if (!*dir) {
+			free(dir);
+			dir = (char *)NULL;
+			continue;
+		}
+		if (*dir == 'q' && !*(dir + 1)) {
+			free(dir);
+			return (char *)NULL;
+		}
+		if (access(dir , R_OK | W_OK | X_OK) == -1) {
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "dup: %s: %s\n",	dir, strerror(errno));
+			free(dir);
+			dir = (char *)NULL;
+			continue;
+		}
+	}
+
+	return dir;
+}
+
 int
 dup_file(char **cmd)
 {
 	if (!cmd[1] || IS_HELP(cmd[1])) {
 		puts(_(DUP_USAGE));
 		return EXIT_SUCCESS;
+	}
+
+	char *dest_dir = get_dup_file_dest_dir();
+	if (!dest_dir)
+		return EXIT_SUCCESS;
+
+	size_t dlen = strlen(dest_dir);
+	if (dlen > 1 && dest_dir[dlen - 1] == '/') {
+		dest_dir[dlen - 1] = '\0';
+		dlen--;
 	}
 
 	log_function(NULL);
@@ -657,19 +726,22 @@ dup_file(char **cmd)
 		if (strchr(source, '\\')) {
 			char *deq_str = dequote_str(source, 0);
 			if (!deq_str) {
-				fprintf(stderr, "%s: %s: Error dequoting file name\n",
-					PROGRAM_NAME, source);
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "dup: %s: Error dequoting file name\n",
+					source);
 				continue;
 			}
 			strcpy(source, deq_str);
 			free(deq_str);
 		}
 
-		// Use source as destiny file name: source.copy, and, if already
-		// exists, source.copy-n, where N is an integer greater than zero
+		/* Use source as destiny file name: source.copy, and, if already
+		 * exists, source.copy-n, where N is an integer greater than zero */
 		size_t source_len = strlen(source);
-		if (strcmp(source, "/") != 0 && source[source_len - 1] == '/')
+		int rem_slash = 0;
+		if (strcmp(source, "/") != 0 && source_len > 0 && source[source_len - 1] == '/') {
 			source[source_len - 1] = '\0';
+			rem_slash = 1;
+		}
 
 		char *tmp = strrchr(source, '/');
 		char *source_name;
@@ -680,23 +752,34 @@ dup_file(char **cmd)
 			source_name = source;
 
 		char tmp_dest[PATH_MAX];
-		snprintf(tmp_dest, PATH_MAX - 1, "%s.copy", source_name);
+		if (strcmp(dest_dir, "/") != 0)
+			snprintf(tmp_dest, sizeof(tmp_dest), "%s/%s.copy", dest_dir, source_name);
+		else
+			snprintf(tmp_dest, sizeof(tmp_dest), "%s%s.copy", dest_dir, source_name);
+
 		char bk[PATH_MAX + 11];
 		xstrsncpy(bk, tmp_dest, PATH_MAX);
 		struct stat attr;
-		int suffix = 1;
+		size_t suffix = 1;
 		while (stat(bk, &attr) == EXIT_SUCCESS) {
-			snprintf(bk, sizeof(bk), "%s-%d", tmp_dest, suffix);
+			snprintf(bk, sizeof(bk), "%s-%zu", tmp_dest, suffix);
 			suffix++;
 		}
 		char *dest = savestring(bk, strlen(bk));
+
+		if (rem_slash == 1)
+			source[source_len - 1] = '/';
 
 		if (rsync_path) {
 			char *_cmd[] = {"rsync", "-aczvAXHS", "--progress", source, dest, NULL};
 			if (launch_execve(_cmd, FOREGROUND, E_NOFLAG) != EXIT_SUCCESS)
 				exit_status = EXIT_FAILURE;
 		} else {
+#if !defined(_BE_POSIX)
 			char *_cmd[] = {"cp", "-a", source, dest, NULL};
+#else
+			char *_cmd[] = {"cp", source, dest, NULL};
+#endif
 			if (launch_execve(_cmd, FOREGROUND, E_NOFLAG) != EXIT_SUCCESS)
 				exit_status = EXIT_FAILURE;
 		}
@@ -704,6 +787,7 @@ dup_file(char **cmd)
 		free(dest);
 	}
 
+	free(dest_dir);
 	free(rsync_path);
 	return exit_status;
 } 
@@ -713,15 +797,12 @@ create_file(char **cmd)
 {
 	if (cmd[1] && IS_HELP(cmd[1])) {
 		puts(_(NEW_USAGE));
-		return EXIT_FAILURE;
+		return EXIT_SUCCESS;
 	}
 
 	log_function(NULL);
 
 	int exit_status = EXIT_SUCCESS;
-#if defined(__HAIKU__) || defined(__APPLE__)
-	int file_in_cwd = 0;
-#endif
 	int free_cmd = 0;
 
 	/* If no argument provided, ask the user for a filename */
@@ -760,61 +841,63 @@ create_file(char **cmd)
 	}
 
 	/* Properly format filenames */
-	size_t i;
+	size_t i, hlen = workspaces[cur_ws].path ? strlen(workspaces[cur_ws].path) : 0;
 	for (i = 1; cmd[i]; i++) {
-		if (strchr(cmd[i], '\\')) {
-			char *deq_str = dequote_str(cmd[i], 0);
-			if (!deq_str) {
-				_err('w', PRINT_PROMPT, _("%s: %s: Error dequoting filename\n"),
-					PROGRAM_NAME, cmd[i]);
-				continue;
-			}
-
-			strcpy(cmd[i], deq_str);
-			free(deq_str);
+		char *npath = normalize_path(cmd[i], strlen(cmd[i]));
+		if (!npath) {
+			*cmd[i] = '\0'; /* Invalidate this entry */
+			continue;
 		}
 
-		if (*cmd[i] == '~') {
-			char *exp_path = tilde_expand(cmd[i]);
-			if (exp_path) {
-				cmd[i] = (char *)xrealloc(cmd[i], (strlen(exp_path) + 1)
-											* sizeof(char));
-				strcpy(cmd[i], exp_path);
-				free(exp_path);
-			}
-		}
+		int is_dir = 0;
+		size_t flen = strlen(cmd[i]);
+		if (flen > 1 && cmd[i][flen - 1] == '/')
+			is_dir = 1;
 
-		/* If the file already exists, create it as file.new */
+		cmd[i] = (char *)xrealloc(cmd[i], (strlen(npath) + 2) * sizeof(char));
+		sprintf(cmd[i], "%s%c", npath, is_dir == 1 ? '/' : 0);
+		free(npath);
+
+		/* If the file already exists, skip it */
 		struct stat a;
 		if (lstat(cmd[i], &a) == 0) {
-			int dir = 0;
-			char old_name[PATH_MAX];
-			strcpy(old_name, cmd[i]); 
-
-			size_t len = strlen(cmd[i]);
-			if (cmd[i][len - 1] == '/') {
-				cmd[i][len - 1] = '\0';
-				dir = 1;
+			int ret = strncmp(cmd[i], workspaces[cur_ws].path, hlen);
+			char *name = (ret == 0 && *(cmd[i] + hlen) && *(cmd[i] + hlen + 1))
+				? cmd[i] + hlen + 1 : cmd[i];
+			fprintf(stderr, "%s: File exists\n", name);
+			if (cmd[i + 1]) {
+				printf("Press any key to continue ...");
+				xgetchar();
+				putchar('\n');
 			}
+			exit_status = EXIT_FAILURE;
+			*cmd[i] = '\0'; /* Invalidate entry */
 
-			cmd[i] = (char *)xrealloc(cmd[i], (len + 5) * sizeof(char));
-			if (dir)
-				strcat(cmd[i], ".new/");
-			else
-				strcat(cmd[i], ".new");
-
-			_err(0, PRINT_PROMPT, _("%s: %s: File already exists. "
-			"Trying with '%s' instead\n"), PROGRAM_NAME, old_name, cmd[i]);
+			continue;
 		}
 
-#if defined(__HAIKU__) || defined(__APPLE__)
-		/* If at least one filename lacks a slash (or it is the only and
-		 * last char, in which case we have a directory in CWD), we are
-		 * creating a file in CWD, and thereby we need to update the screen */
-		char *ret = strrchr(cmd[i], '/');
-		if (!ret || !*(ret + 1))
-			file_in_cwd = 1;
-#endif
+		/* If we have DIR/FILE and DIR doesn't exit, create DIR */
+		char *ls = strrchr(cmd[i], '/');
+		if (!ls || !*(ls + 1) || ls == cmd[i])
+			continue; /* Last slash is either the first or the last char */
+
+		*ls = '\0';
+		if (stat(cmd[i], &a) != -1) { /* Parent dir exists */
+			*ls = '/';
+			continue;
+		}
+
+		char *md_cmd[] = {"mkdir", "-p", cmd[i], NULL};
+		if (launch_execve(md_cmd, FOREGROUND, E_NOFLAG) != EXIT_SUCCESS) {
+			*cmd[i] = '\0'; /* Invalidate this entry */
+			if (cmd[i + 1]) {
+				printf("Press any key to continue ...");
+				xgetchar();
+				putchar('\n');
+			}
+			exit_status = EXIT_FAILURE;
+		}
+		*ls = '/';
 	}
 
 	/* Construct commands */
@@ -838,8 +921,10 @@ create_file(char **cmd)
 	size_t cnfiles = 1, cndirs = 2;
 
 	for (i = 1; cmd[i]; i++) {
+		if (!*cmd[i])
+			continue;
 		size_t cmd_len = strlen(cmd[i]);
-		/* Filenames ending with a slash are taken as dir names */
+		/* File names ending with a slash are taken as directory names */
 		if (cmd[i][cmd_len - 1] == '/') {
 			ndirs[cndirs] = cmd[i];
 			cndirs++;
@@ -852,15 +937,29 @@ create_file(char **cmd)
 	ndirs[cndirs] = (char *)NULL;
 	nfiles[cnfiles] = (char *)NULL;
 
+	size_t total = (cndirs - 2) + (cnfiles - 1);
+	int ret = 0;
 	/* Execute commands */
 	if (cnfiles > 1) {
-		if (launch_execve(nfiles, FOREGROUND, 0) != EXIT_SUCCESS)
-			exit_status = EXIT_FAILURE;
+		if ((ret = launch_execve(nfiles, FOREGROUND, E_NOFLAG)) != EXIT_SUCCESS) {
+			if (total > 1) {
+				printf("Press any key to continue ...");
+				xgetchar();
+				putchar('\n');
+			}
+			exit_status = ret;
+		}
 	}
 
 	if (cndirs > 2) {
-		if (launch_execve(ndirs, FOREGROUND, 0) != EXIT_SUCCESS)
-			exit_status = EXIT_FAILURE;
+		if ((ret = launch_execve(ndirs, FOREGROUND, E_NOFLAG)) != EXIT_SUCCESS) {
+			if (total > 1) {
+				printf("Press any key to continue ...");
+				xgetchar();
+				putchar('\n');
+			}
+			exit_status = ret;
+		}
 	}
 
 	free(nfiles[0]);
@@ -868,19 +967,52 @@ create_file(char **cmd)
 	free(ndirs[1]);
 	free(nfiles);
 	free(ndirs);
-	if (free_cmd) {
+
+	int file_in_cwd = 0;
+	int n = workspaces[cur_ws].path ? count_dir(workspaces[cur_ws].path, NO_CPOP) - 2 : 0;
+	if (n > 0 && (size_t)n > files)
+		file_in_cwd = 1;
+
+	if (total > 0) {
+		if (autols == 1 && file_in_cwd == 1)
+			reload_dirlist();
+
+		for (i = 1; cmd[i]; i++) {
+			if (!*cmd[i])
+				continue;
+
+			int dup = 0;
+			for (size_t j = i + 1; cmd[j]; j++) {
+				if (*cmd[i] == *cmd[j] && strcmp(cmd[i], cmd[j]) == 0) {
+					dup = 1;
+					break;
+				}
+			}
+			if (dup == 1) {
+				total--;
+				continue;
+			}
+
+			struct stat a;
+			if (stat(cmd[i], &a) != -1) {
+				ret = workspaces[cur_ws].path
+					? strncmp(cmd[i], workspaces[cur_ws].path, hlen) : -1;
+				char *name = (ret == 0 && *(cmd[i] + hlen) && *(cmd[i] + hlen + 1))
+					? cmd[i] + hlen + 1 : cmd[i];
+				printf("%s\n", name);
+			} else {
+				total--;
+			}
+		}
+		if (total > 0)
+			print_reload_msg("%zu file(s) created\n", total);
+	}
+
+	if (free_cmd == 1) {
 		for (i = 0; cmd[i]; i++)
 			free(cmd[i]);
 		free(cmd);
 	}
-
-#if defined(__HAIKU__)// || defined(__APPLE__)
-	if (exit_status == EXIT_SUCCESS && autols && file_in_cwd) {
-		free_dirlist();
-		if (list_dir() != EXIT_SUCCESS)
-			exit_status = EXIT_FAILURE;
-	}
-#endif
 
 	return exit_status;
 }
@@ -900,8 +1032,8 @@ open_function(char **cmd)
 		if (strchr(cmd[1], '\\')) {
 			char *deq_path = dequote_str(cmd[1], 0);
 			if (!deq_path) {
-				fprintf(stderr, _("%s: %s: Error dequoting filename\n"),
-					PROGRAM_NAME, cmd[1]);
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, _("open: %s: Error dequoting filename\n"),
+					cmd[1]);
 				return EXIT_FAILURE;
 			}
 
@@ -915,16 +1047,15 @@ open_function(char **cmd)
 	/* Check file existence */
 	struct stat attr;
 	if (lstat(file, &attr) == -1) {
-		fprintf(stderr, "%s: open: %s: %s\n", PROGRAM_NAME, cmd[1],
-		    strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "open: %s: %s\n", cmd[1], strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	/* Check file type: only directories, symlinks, and regular files
 	 * will be opened */
 	char no_open_file = 1;
-	char *file_type = (char *)NULL;
-	char *types[] = {
+	const char *file_type = (char *)NULL;
+	const char *types[] = {
 		"block device",
 		"character device",
 		"socket",
@@ -942,8 +1073,7 @@ open_function(char **cmd)
 	case S_IFLNK: {
 		int ret = get_link_ref(file);
 		if (ret == -1) {
-			fprintf(stderr, _("%s: %s: Broken symbolic link\n"),
-					PROGRAM_NAME, file);
+			fprintf(stderr, _("%s: open: %s: Broken symbolic link\n"), PROGRAM_NAME, file);
 			return EXIT_FAILURE;
 		} else if (ret == S_IFDIR) {
 			return cd_function(file, CD_PRINT_ERROR);
@@ -966,7 +1096,7 @@ open_function(char **cmd)
 	 * or regular file), print the corresponding error message and
 	 * exit */
 	if (no_open_file) {
-		fprintf(stderr, _("%s: %s (%s): Cannot open file\nTry "
+		fprintf(stderr, _("%s: open: %s (%s): Cannot open file\nTry "
 			"'APPLICATION FILENAME'\n"), PROGRAM_NAME, cmd[1], file_type);
 		return EXIT_FAILURE;
 	}
@@ -977,7 +1107,7 @@ open_function(char **cmd)
 		int ret = open_file(file);
 		if (!opener && ret == EXIT_FAILURE) {
 			fputs("Add a new entry to the mimelist file ('mime "
-			      "edit' or F6) or run 'open FILE APPLICATION'\n", stderr);
+				"edit' or F6) or run 'open FILE APPLICATION'\n", stderr);
 			return EXIT_FAILURE;
 		}
 		return ret;
@@ -990,11 +1120,11 @@ open_function(char **cmd)
 		return EXIT_SUCCESS;
 
 	if (ret == ENOENT) { /* 2: No such file or directory */
-		fprintf(stderr, "%s: %s: Command not found\n", PROGRAM_NAME, cmd[2]);
+		fprintf(stderr, "%s: open: %s: Command not found\n", PROGRAM_NAME, cmd[2]);
 		return 127;
 	}
 
-	fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, cmd[2], strerror(ret));
+	fprintf(stderr, "%s: open: %s: %s\n", PROGRAM_NAME, cmd[2], strerror(ret));
 	return ret;
 }
 
@@ -1011,8 +1141,7 @@ edit_link(char *link)
 	if (strchr(link, '\\')) {
 		char *tmp = dequote_str(link, 0);
 		if (!tmp) {
-			fprintf(stderr, _("%s: %s: Error dequoting file\n"),
-			    PROGRAM_NAME, link);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("le: %s: Error dequoting file\n"), link);
 			return EXIT_FAILURE;
 		}
 
@@ -1027,22 +1156,19 @@ edit_link(char *link)
 	/* Check we have a valid symbolic link */
 	struct stat attr;
 	if (lstat(link, &attr) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, link,
-		    strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "le: %s: %s\n", link, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	if (!S_ISLNK(attr.st_mode)) {
-		fprintf(stderr, _("%s: %s: Not a symbolic link\n"),
-		    PROGRAM_NAME, link);
+		fprintf(stderr, _("le: %s: Not a symbolic link\n"), link);
 		return EXIT_FAILURE;
 	}
 
 	/* Get file pointed to by symlink and report to the user */
 	char *real_path = realpath(link, NULL);
 	if (!real_path) {
-		printf(_("%s%s%s currently pointing to nowhere (broken link)\n"),
-		    or_c, link, df_c);
+		printf(_("%s%s%s currently pointing to nowhere (broken link)\n"), or_c, link, df_c);
 	} else {
 		printf(_("%s%s%s currently pointing to "), ln_c, link, df_c);
 		colors_list(real_path, NO_ELN, NO_PAD, PRINT_NEWLINE);
@@ -1084,7 +1210,7 @@ edit_link(char *link)
 			if (file_info[a].name)
 				new_path = savestring(file_info[a].name, strlen(file_info[a].name));
 		} else {
-			fprintf(stderr, _("%s: %s: Invalid ELN\n"), PROGRAM_NAME, new_path);
+			fprintf(stderr, _("le: %s: Invalid ELN\n"), new_path);
 			free(new_path);
 			return EXIT_FAILURE;
 		}
@@ -1100,8 +1226,7 @@ edit_link(char *link)
 	if (strchr(new_path, '\\')) {
 		char *tmp = dequote_str(new_path, 0);
 		if (!tmp) {
-			fprintf(stderr, _("%s: %s: Error dequoting file\n"),
-			    PROGRAM_NAME, new_path);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("le: %s: Error dequoting file\n"), new_path);
 			free(new_path);
 			return EXIT_FAILURE;
 		}
@@ -1149,7 +1274,11 @@ edit_link(char *link)
 	}
 
 	/* Finally, relink the symlink to new_path */
+#if !defined(_BE_POSIX)
 	char *cmd[] = {"ln", "-sfn", new_path, link, NULL};
+#else
+	char *cmd[] = {"ln", "-sf", new_path, link, NULL};
+#endif /* _BE_POSIX */
 	if (launch_execve(cmd, FOREGROUND, E_NOFLAG) != EXIT_SUCCESS) {
 		free(new_path);
 		return EXIT_FAILURE;
@@ -1275,35 +1404,66 @@ copy_function(char **args, int copy_and_rename)
 		deselect_all();
 
 #if defined(__HAIKU__)// || defined(__APPLE__)
-	if (autols) {
-		free_dirlist();
-		list_dir();
-	}
+	if (autols == 1)
+		reload_dirlist();
 #endif
 
 	return EXIT_SUCCESS;
 }
 
+/* Print the list of files removed via the most recent call to the 'r' command */
+static void
+list_removed_files(char **cmd, const size_t start, const int cwd)
+{
+	size_t i, c = 0;
+	for (i = start; cmd[i]; i++);
+	char **removed_files = (char **)xnmalloc(i + 1, sizeof(char *));
+
+	struct stat a;
+	for (i = start; cmd[i]; i++) {
+		if (lstat(cmd[i], &a) == -1 && errno == ENOENT) {
+			removed_files[c] = cmd[i];
+			c++;
+		}
+	}
+	removed_files[c] = (char *)NULL;
+
+	if (c == 0) { /* No file was removed */
+		free(removed_files);
+		return;
+	}
+
+	if (autols == 1 && cwd == 1)
+		reload_dirlist();
+	for (i = 0; i < c; i++) {
+		if (!removed_files[i] || !*removed_files[i])
+			continue;
+		char *p = abbreviate_file_name(removed_files[i]);
+		printf("%s\n", p ? p : removed_files[i]);
+		if (p && p != removed_files[i])
+			free(p);
+	}
+	print_reload_msg(_("%zu file(s) removed\n"), c);
+
+	free(removed_files);
+}
+
 int
 remove_file(char **args)
 {
-	int cwd = 0, exit_status = EXIT_SUCCESS;
+	int cwd = 0, exit_status = EXIT_SUCCESS, errs = 0;
 
 	log_function(NULL);
 
+	struct stat a;
 	char **rm_cmd = (char **)xnmalloc(args_n + 4, sizeof(char *));
 	int i, j = 3, dirs = 0;
 
 	for (i = 1; args[i]; i++) {
 		/* Check if at least one file is in the current directory. If not,
 		 * there is no need to refresh the screen */
-		if (!cwd) {
-			char *ret = strchr(args[i], '/');
-			/* If there's no slash, or if slash is the last char and
-			 * the file is not root "/", we have a file in CWD */
-			if (!ret || (!*(ret + 1) && ret != args[i]))
-				cwd = 1;
-		}
+		if (cwd == 0)
+			cwd = is_file_in_cwd(args[i]);
 
 		char *tmp = (char *)NULL;
 		if (strchr(args[i], '\\')) {
@@ -1311,59 +1471,80 @@ remove_file(char **args)
 			if (tmp) {
 				/* Start storing file names in 3: 0 is for 'rm', and 1
 				 * and 2 for parameters, including end of parameters (--) */
-				rm_cmd[j] = savestring(tmp, strlen(tmp));
-				j++;
+				if (lstat(tmp, &a) != -1) {
+					rm_cmd[j] = savestring(tmp, strlen(tmp));
+					j++;
+					if (S_ISDIR(a.st_mode))
+						dirs = 1;
+				} else {
+					_err(ERR_NO_STORE, NOPRINT_PROMPT, "r: %s: %s\n", tmp, strerror(errno));
+					errs++;
+				}
 				free(tmp);
 			} else {
-				fprintf(stderr, "%s: %s: Error dequoting file name\n",
-				    PROGRAM_NAME, args[i]);
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "r: %s: Error dequoting file name\n", args[i]);
 				continue;
 			}
 		} else {
-			rm_cmd[j] = savestring(args[i], strlen(args[i]));
-			j++;
+			if (lstat(args[i], &a) != -1) {
+				rm_cmd[j] = savestring(args[i], strlen(args[i]));
+				j++;
+				if (S_ISDIR(a.st_mode))
+					dirs = 1;
+			} else {
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "r: %s: %s\n", args[i], strerror(errno));
+				errs++;
+			}
 		}
-
-		struct stat attr;
-		if (!dirs && lstat(rm_cmd[j - 1], &attr) != -1 && S_ISDIR(attr.st_mode))
-			dirs = 1;
 	}
 
 	rm_cmd[j] = (char *)NULL;
 
+	if (errs > 0 && j > 3) { /* If errors but at least one file was deleted */
+		fputs("Press any key to continue... ", stdout);
+		xgetchar();
+	}
+
+	if (j == 3) { /* No file to be deleted */
+		free(rm_cmd);
+		return EXIT_FAILURE;
+	}
+
 	rm_cmd[0] = savestring("rm", 2);
-	if (dirs)
-#if defined(__NetBSD__) || defined(__OpenBSD__)
+	if (dirs == 1)
+#if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__) || defined(_BE_POSIX)
 		rm_cmd[1] = savestring("-r", 2);
-#else
+#else /* Linux and FreeBSD only */
 		rm_cmd[1] = savestring("-dIr", 4);
-#endif
+#endif /* __NetBSD__ || __OpenBSD__ || __APPLE__ || _BE_POSIX */
 	else
-#if defined(__NetBSD__) || defined(__OpenBSD__)
+#if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__) || defined(_BE_POSIX)
 		rm_cmd[1] = savestring("-f", 2);
-#else
+#else /* Linux and FreeBSD only */
 		rm_cmd[1] = savestring("-I", 2);
-#endif
+#endif /* __NetBSD__ || __OpenBSD__ || __APPLE__ || _BE_POSIX */
 	rm_cmd[2] = savestring("--", 2);
 
 	if (launch_execve(rm_cmd, FOREGROUND, E_NOFLAG) != EXIT_SUCCESS)
 		exit_status = EXIT_FAILURE;
-#if defined(__HAIKU__)// || defined(__APPLE__)
+#if defined(__HAIKU__)
 	else {
-		if (cwd && autols && strcmp(args[1], "--help") != 0
-		&& strcmp(args[1], "--version") != 0) {
-			free_dirlist();
-			exit_status = list_dir();
-		}
+		if (cwd == 1 && autols == 1 && strcmp(args[1], "--help") != 0
+		&& strcmp(args[1], "--version") != 0)
+			reload_dirlist();
 	}
-#endif
+#endif /* __HAIKU__ */
 
 	if (is_sel && exit_status == EXIT_SUCCESS)
 		deselect_all();
 
+	if (print_removed_files == 1)
+		list_removed_files(rm_cmd, 3, cwd);
+
 	for (i = 0; rm_cmd[i]; i++)
 		free(rm_cmd[i]);
 	free(rm_cmd);
+
 	return exit_status;
 }
 
@@ -1373,15 +1554,17 @@ remove_file(char **args)
  * a temporary file, which is opened via the mime function and shown
  * to the user to modify it. Once the file names have been modified and
  * saved, modifications are printed on the screen and the user is
- * asked whether to perform the actual bulk renaming (via mv) or not.
- * I took this bulk rename method, just because it is quite simple and
- * KISS, from the fff filemanager. So, thanks fff! BTW, this method
+ * asked whether to perform the actual bulk renaming or not.
+ * This bulk rename method, just because it is quite simple and
+ * KISS, was taken from the fff filemanager. So, thanks fff! BTW, this method
  * is also implemented by ranger and nnn */
 int
 bulk_rename(char **args)
 {
-	if (!args[1])
-		return EXIT_FAILURE;
+	if (!args || !args[1] || IS_HELP(args[1])) {
+		puts(_(BULK_USAGE));
+		return EXIT_SUCCESS;
+	}
 
 	log_function(NULL);
 
@@ -1395,7 +1578,7 @@ bulk_rename(char **args)
 
 	int fd = mkstemp(bulk_file);
 	if (fd == -1) {
-		_err('e', PRINT_PROMPT, "bulk: %s: %s\n", bulk_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "br: mkstemp: %s: %s\n", bulk_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -1405,33 +1588,53 @@ bulk_rename(char **args)
 #ifdef __HAIKU__
 	fp = fopen(bulk_file, "w");
 	if (!fp) {
-		_err('e', PRINT_PROMPT, "bulk: %s: %s\n", bulk_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "br: fopen: %s: %s\n", bulk_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 #endif
 
-#define BULK_MESSAGE "# Edit the file names, save, and quit the editor\n\
-# Just quit the editor to cancel the operation\n\n"
-
 #ifndef __HAIKU__
-	dprintf(fd, BULK_MESSAGE);
+	dprintf(fd, BULK_RENAME_TMP_FILE_HEADER);
 #else
-	fprintf(fp, BULK_MESSAGE);
+	fprintf(fp, BULK_RENAME_TMP_FILE_HEADER);
 #endif
 
+	struct stat attr;
+	size_t counter = 0;
 	/* Copy all files to be renamed to the bulk file */
 	for (i = 1; args[i]; i++) {
 		/* Dequote file name, if necessary */
 		if (strchr(args[i], '\\')) {
 			char *deq_file = dequote_str(args[i], 0);
 			if (!deq_file) {
-				fprintf(stderr, _("bulk: %s: Error dequoting "
-						"file name\n"), args[i]);
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, _("br: %s: Error "
+					"dequoting file name\n"), args[i]);
 				continue;
 			}
 			strcpy(args[i], deq_file);
 			free(deq_file);
 		}
+
+		/* Resolve "./" and "../" */
+		if (*args[i] == '.' && (args[i][1] == '/' || (args[i][1] == '.'
+		&& args[i][2] == '/') ) ) {
+			char *p = realpath(args[i], NULL);
+			if (!p) {
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "br: %s: %s\n", args[i],
+					strerror(errno));
+				continue;
+			}
+			free(args[i]);
+			args[i] = p;
+		}
+
+		if (lstat(args[i], &attr) == -1) {
+			fprintf(stderr, "br: %s: %s\n", args[i], strerror(errno));
+			continue;
+		} else {
+			counter++;
+		}
+
 #ifndef __HAIKU__
 		dprintf(fd, "%s\n", args[i]);
 #else
@@ -1444,16 +1647,21 @@ bulk_rename(char **args)
 	arg_total = i;
 	close(fd);
 
+	if (counter == 0) { /* No valid file name */
+		if (unlinkat(fd, bulk_file, 0) == -1)
+			_err('e', PRINT_PROMPT, "br: unlinkat: %s: %s\n", bulk_file, strerror(errno));
+		return EXIT_FAILURE;
+	}
+
 	fp = open_fstream_r(bulk_file, &fd);
 	if (!fp) {
-		_err('e', PRINT_PROMPT, "bulk: '%s': %s\n", bulk_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "br: %s: %s\n", bulk_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	/* Store the last modification time of the bulk file. This time
 	 * will be later compared to the modification time of the same
 	 * file after shown to the user */
-	struct stat attr;
 	fstat(fd, &attr);
 	time_t mtime_bfr = (time_t)attr.st_mtime;
 
@@ -1462,11 +1670,10 @@ bulk_rename(char **args)
 	exit_status = open_file(bulk_file);
 	open_in_foreground = 0;
 	if (exit_status != EXIT_SUCCESS) {
-		fprintf(stderr, _("bulk: %s\n"), strerror(errno));
-		if (unlinkat(fd, bulk_file, 0) == -1) {
-			_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-			    bulk_file, strerror(errno));
-		}
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "br: %s\n",
+			errno != 0 ? strerror(errno) : "Error opening temporary file");
+		if (unlinkat(fd, bulk_file, 0) == -1)
+			_err('e', PRINT_PROMPT, "br: unlinkat: %s: %s\n", bulk_file, strerror(errno));
 		close_fstream(fp, fd);
 		return EXIT_FAILURE;
 	}
@@ -1474,7 +1681,7 @@ bulk_rename(char **args)
 	close_fstream(fp, fd);
 	fp = open_fstream_r(bulk_file, &fd);
 	if (!fp) {
-		_err('e', PRINT_PROMPT, "bulk: '%s': %s\n", bulk_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "br: %s: %s\n", bulk_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -1482,10 +1689,9 @@ bulk_rename(char **args)
 	 * match, nothing was modified */
 	fstat(fd, &attr);
 	if (mtime_bfr == (time_t)attr.st_mtime) {
-		puts(_("bulk: Nothing to do"));
+		puts(_("br: Nothing to do"));
 		if (unlinkat(fd, bulk_file, 0) == -1) {
-			_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-			    bulk_file, strerror(errno));
+			_err('e', PRINT_PROMPT, "br: unlinkat: %s: %s\n", bulk_file, strerror(errno));
 			exit_status = EXIT_FAILURE;
 		}
 		close_fstream(fp, fd);
@@ -1503,10 +1709,9 @@ bulk_rename(char **args)
 	}
 
 	if (arg_total != file_total) {
-		fputs(_("bulk: Line mismatch in renaming file\n"), stderr);
+		fputs(_("br: Line mismatch in renaming file\n"), stderr);
 		if (unlinkat(fd, bulk_file, 0) == -1)
-			_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-			    bulk_file, strerror(errno));
+			_err('e', PRINT_PROMPT, "br: unlinkat: %s: %s\n", bulk_file, strerror(errno));
 		close_fstream(fp, fd);
 		return EXIT_FAILURE;
 	}
@@ -1537,10 +1742,9 @@ bulk_rename(char **args)
 
 	/* If no file name was modified */
 	if (!modified) {
-		puts(_("bulk: Nothing to do"));
+		puts(_("br: Nothing to do"));
 		if (unlinkat(fd, bulk_file, 0) == -1) {
-			_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-			    bulk_file, strerror(errno));
+			_err('e', PRINT_PROMPT, "br: unlinkat: %s: %s\n", bulk_file, strerror(errno));
 			exit_status = EXIT_FAILURE;
 		}
 		free(line);
@@ -1613,18 +1817,14 @@ bulk_rename(char **args)
 	free(line);
 
 	if (unlinkat(fd, bulk_file, 0) == -1) {
-		_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-		    bulk_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "br: unlinkat: %s: %s\n", bulk_file, strerror(errno));
 		exit_status = EXIT_FAILURE;
 	}
 	close_fstream(fp, fd);
 
-#if defined(__HAIKU__) || defined(__APPLE__)
-	if (autols) {
-		free_dirlist();
-		if (list_dir() != EXIT_SUCCESS)
-			exit_status = EXIT_FAILURE;
-	}
+#if defined(__HAIKU__)// || defined(__APPLE__)
+	if (autols == 1)
+		reload_dirlist();
 #endif
 
 	return exit_status;
@@ -1640,7 +1840,7 @@ char *export(char **filenames, int open)
 
 	int fd = mkstemp(tmp_file);
 	if (fd == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, tmp_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "exp: %s: %s\n", tmp_file, strerror(errno));
 		free(tmp_file);
 		return (char *)NULL;
 	}
@@ -1649,7 +1849,7 @@ char *export(char **filenames, int open)
 #ifdef __HAIKU__
 	FILE *fp = fopen(tmp_file, "w");
 	if (!fp) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, tmp_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "exp: %s: %s\n", tmp_file, strerror(errno));
 		free(tmp_file);
 		return (char *)NULL;
 	}
@@ -1730,8 +1930,8 @@ batch_link(char **args)
 		char *ptr = strrchr(linkname, '/');
 		if (symlinkat(args[i], AT_FDCWD, ptr ? ++ptr : linkname) == -1) {
 			exit_status = EXIT_FAILURE;
-			fprintf(stderr, _("%s: %s: Cannot create symlink: %s\n"),
-			    PROGRAM_NAME, ptr ? ptr : linkname, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("bl: symlinkat: %s: Cannot create "
+				"symlink: %s\n"), ptr ? ptr : linkname, strerror(errno));
 		}
 	}
 

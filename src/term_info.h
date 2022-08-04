@@ -58,7 +58,6 @@
 
 struct terms_t {
 	char *name; /* Terminal name as found in $TERM and the terminfo database */
-
 	/* Let's hardcode the length of each terminal name to prevent unnecessary
 	 * calls to strlen(3): comparing the first byte and this length to those
 	 * of the current terminal is 99% of the time enough */
@@ -674,7 +673,6 @@ const struct terms_t TERM_INFO[] = {
 	{"tw52-color", 10, 16, 0},
 	{"uniterm", 7, -1, 1},
 	{"uniterm49", 9, -1, 1},
-	{"uuterm", 6, 8, 1},
 	{"uwin", 4, 8, 1},
 	{"v200-nam", 8, -1, 1},
 	{"v320n", 5, -1, 1},

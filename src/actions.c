@@ -1,4 +1,4 @@
-/* actions.c -- a few functions for the plugins systems */
+/* actions.c -- A few functions for the plugins system */
 
 /*
  * This file is part of CliFM
@@ -40,70 +40,30 @@
 #include "mime.h"
 #include "misc.h"
 
-/* Find the plugins-helper file and set CLIFM_PLUGINS_HELPER accordingly
- * This envionment variable will be used by plugins. Returns zero on
- * success or one on error */
-static int
-setenv_plugins_helper(void)
+/* Get the executable's path of the action ACTION
+ * Returns this path on success and NULL on error, in which case STATUS
+ * is set to the appropriate error code */
+static char *
+get_plugin_path(char *action, int *status)
 {
-	if (getenv("CLIFM_PLUGINS_HELPER"))
-		return EXIT_SUCCESS;
-
-	char _path[PATH_MAX];
-	snprintf(_path, PATH_MAX, "%s/plugins-helper", plugins_dir);
-
-	struct stat attr;
-	if (stat(_path, &attr) != -1 && setenv("CLIFM_PLUGINS_HELPER", _path, 1) == 0)
-		return EXIT_SUCCESS;
-
-	const char *_paths[] = {
-#ifndef __HAIKU__
-		"/usr/share/clifm/plugins/plugins-helper",
-		"/usr/local/share/clifm/plugins/plugins-helper",
-#else
-		"/boot/system/non-packaged/data/clifm/plugins/plugins-helper",
-		"/boot/system/data/clifm/plugins/plugins-helper",
-#endif
-		NULL};
-
-	size_t i;
-	for (i = 0; _paths[i]; i++) {
-		if (stat(_paths[i], &attr) != -1
-		&& setenv("CLIFM_PLUGINS_HELPER", _paths[i], 1) == 0)
-			return EXIT_SUCCESS;
-	}
-
-	return EXIT_FAILURE;
-}
-
-/* The core of this function was taken from NNN's run_selected_plugin
- * function and modified to fit our needs. Thanks NNN! */
-int
-run_action(char *action, char **args)
-{
-	if (!action)
-		return EXIT_FAILURE;
-
-		/* #####################################
-		 * #    1) CREATE CMD TO BE EXECUTED   #
-		 * ##################################### */
-
-	char *cmd = (char *)NULL;
 	size_t action_len = strlen(action);
 
 	/* Remove terminating new line char */
-	if (action[action_len - 1] == '\n')
+	if (action_len > 0 && action[action_len - 1] == '\n')
 		action[action_len - 1] = '\0';
 
+	char *cmd = (char *)NULL;
 	int dir_path = 0;
+
 	if (strchr(action, '/')) {
 		cmd = (char *)xnmalloc(action_len + 1, sizeof(char));
 		strcpy(cmd, action); /* NOLINT */
 		dir_path = 1;
 	} else { /* If not a path, PLUGINS_DIR is assumed */
 		if (!plugins_dir || !*plugins_dir) {
-			fprintf(stderr, "%s: Plugins directory not defined\n", PROGRAM_NAME);
-			return EXIT_FAILURE;
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("actions: Plugins directory not defined\n"));
+			*status = EXIT_FAILURE;
+			return (char *)NULL;
 		}
 		cmd = (char *)xnmalloc(action_len + strlen(plugins_dir) + 2, sizeof(char));
 		sprintf(cmd, "%s/%s", plugins_dir, action); /* NOLINT */
@@ -112,21 +72,43 @@ run_action(char *action, char **args)
 	/* Check if the action file exists and is executable */
 	if (access(cmd, X_OK) == -1) {
 		/* If not in local dir, check system data dir as well */
-		if (data_dir && !dir_path) {
+		if (data_dir && dir_path == 0) {
 			cmd = (char *)xrealloc(cmd, (action_len + strlen(data_dir)
-						+ strlen(PNL) + 11) * sizeof(char));
+				+ strlen(PNL) + 11) * sizeof(char));
 			sprintf(cmd, "%s/%s/plugins/%s", data_dir, PNL, action); /* NOLINT */
 			if (access(cmd, X_OK) == -1) {
-				fprintf(stderr, "actions: %s: %s\n", cmd, strerror(errno));
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "actions: %s: %s\n",	cmd, strerror(errno));
 				free(cmd);
-				return errno;
+				*status = errno;
+				return (char *)NULL;
 			}
 		} else {
-			fprintf(stderr, "actions: %s: %s\n", cmd, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "actions: %s: %s\n",	cmd, strerror(errno));
 			free(cmd);
-			return errno;
+			*status = errno;
+			return (char *)NULL;
 		}
 	}
+
+	return cmd;
+}
+
+/* The core of this function was taken from NNN's run_selected_plugin
+ * function and modified to fit our needs. Thanks NNN! */
+int
+run_action(char *action, char **args)
+{
+	if (!action || !*action)
+		return EXIT_FAILURE;
+
+		/* #####################################
+		 * #    1) CREATE CMD TO BE EXECUTED   #
+		 * ##################################### */
+
+	int s = EXIT_SUCCESS;
+	char *cmd = get_plugin_path(action, &s);
+	if (!cmd)
+		return s;
 
 	size_t cmd_len = strlen(cmd);
 	args[0] = (char *)xrealloc(args[0], (cmd_len + 1) * sizeof(char));
@@ -143,13 +125,13 @@ run_action(char *action, char **args)
 		return EXIT_FAILURE;
 
 	char fifo_path[PATH_MAX];
-	snprintf(fifo_path, PATH_MAX -1, "%s/.pipe.%s", tmp_dir, rand_ext); /* NOLINT */
+	snprintf(fifo_path, sizeof(fifo_path), "%s/.pipe.%s", tmp_dir, rand_ext); /* NOLINT */
 	free(rand_ext);
 
 	setenv("CLIFM_BUS", fifo_path, 1);
 
 	if (mkfifo(fifo_path, 0600) != EXIT_SUCCESS) {
-		printf("%s: %s\n", fifo_path, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "actions: %s: %s\n",	fifo_path, strerror(errno));
 		unsetenv("CLIFM_BUS");
 		return EXIT_FAILURE;
 	}
@@ -162,17 +144,11 @@ run_action(char *action, char **args)
 	if (xargs.cwd_in_title == 1)
 		set_term_title(action);
 
-	/* Let's set CLIFM_PLUGINS_HELPER. Do it only once */
-	static int plugins_helper_set = 0;
-	if (plugins_helper_set == 0 && setenv_plugins_helper() == EXIT_SUCCESS)
-		plugins_helper_set = 1;
-
 	pid_t pid = fork();
 
 	if (pid == 0) {
 		/* Child: write-only end of the pipe */
 		int wfd = open(fifo_path, O_WRONLY | O_CLOEXEC);
-
 		if (wfd == -1)
 			_exit(EXIT_FAILURE);
 
@@ -217,7 +193,7 @@ run_action(char *action, char **args)
 		}
 	} else {
 		exit_status = errno;
-		fprintf(stderr, "%s: waitpid: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "actions: waitpid: %s\n", strerror(errno));
 	}
 
 	/* If the pipe is empty */
@@ -245,7 +221,6 @@ run_action(char *action, char **args)
 		if (_cmd) {
 			size_t i;
 			char **alias_cmd = check_for_alias(_cmd);
-
 			if (alias_cmd) {
 				exit_status = exec_cmd(alias_cmd);
 				for (i = 0; alias_cmd[i]; i++)
@@ -276,8 +251,7 @@ static int
 edit_actions(char *app)
 {
 	if (xargs.stealth_mode == 1) {
-		printf("%s: Access to configuration files is not allowed in "
-		       "stealth mode\n", PROGRAM_NAME);
+		printf("actions: Access to configuration files is not allowed in stealth mode\n");
 		return EXIT_SUCCESS;
 	}
 
@@ -286,9 +260,8 @@ edit_actions(char *app)
 
 	/* Get actions file's current modification time */
 	struct stat attr;
-
 	if (stat(actions_file, &attr) == -1) {
-		fprintf(stderr, "actions: %s: %s\n", actions_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "actions: %s: %s\n",	actions_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -314,8 +287,7 @@ edit_actions(char *app)
 	if (mtime_bfr == (time_t)attr.st_mtime)
 		return EXIT_SUCCESS;
 
-	/* If modification times differ, the file was modified after being
-	 * opened */
+	/* If modification times differ, the file was modified after being opened */
 	/* Reload the array of available actions */
 	if (load_actions() != EXIT_SUCCESS)
 		return EXIT_FAILURE;
@@ -325,7 +297,6 @@ edit_actions(char *app)
 		size_t i;
 		for (i = 0; bin_commands[i]; i++)
 			free(bin_commands[i]);
-
 		free(bin_commands);
 		bin_commands = (char **)NULL;
 	}
@@ -361,8 +332,10 @@ int
 actions_function(char **args)
 {
 	if (!args[1]) {
-		if (actions_n) {
+		if (actions_n > 0) {
 			/* Just list available actions */
+			printf(_("To run a plugin just enter its action name\n"
+				"Example: enter '-' to run the fzfnav plugin\n"));
 			size_t i, largest = get_largest_action_name();
 			for (i = 0; i < actions_n; i++) {
 				printf("%-*s %s->%s %s\n", (int)largest, usr_actions[i].name,
@@ -370,8 +343,8 @@ actions_function(char **args)
 			}
 			return EXIT_SUCCESS;
 		} else {
-			puts(_("actions: No actions defined. Use the 'actions "
-			       "edit' command to add some"));
+			printf(_("actions: No actions defined. Use the 'actions edit' "
+				"command to add new actions\n"));
 			return EXIT_FAILURE;
 		}
 

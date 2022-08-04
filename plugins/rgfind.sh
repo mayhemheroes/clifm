@@ -13,18 +13,18 @@ if [ -n "$1" ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
 fi
 
 if ! type rg > /dev/null 2>&1; then
-	printf "CliFM: rg: Command not found\nInstall ripgrep to use this plugin\n" >&2
-	exit 1
+	printf "clifm: rg: Command not found\nInstall ripgrep to use this plugin\n" >&2
+	exit 127
 fi
 
 if ! type fzf > /dev/null 2>&1; then
-	printf "CliFM: fzf: Command not found\nInstall fzf to use this plugin\n" >&2
-	exit 1
+	printf "clifm: fzf: Command not found\nInstall fzf to use this plugin\n" >&2
+	exit 127
 fi
 
 # Source our plugins helper
 if [ -z "$CLIFM_PLUGINS_HELPER" ] || ! [ -f "$CLIFM_PLUGINS_HELPER" ]; then
-	printf "CliFM: Unable to find plugins-helper file\n" >&2
+	printf "clifm: Unable to find plugins-helper file\n" >&2
 	exit 1
 fi
 # shellcheck source=/dev/null
@@ -43,7 +43,7 @@ while true; do
 		--trim --ignore-case -- "$args" 2>/dev/null | \
 		fzf --ansi --reverse --prompt="$fzf_prompt" \
 		--height="$fzf_height" --color="$fzf_colors" \
-		--no-clear --bind "right:accept" --no-info \
+		--no-clear --bind "right:accept" --no-unicode \
 		--header="Select a file name and press Enter or Right to open it")"
 	[ -z "$file" ] && break
 	clifm --open "$PWD/$(printf "%s" "$file" | cut -d: -f1)"

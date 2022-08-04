@@ -47,6 +47,8 @@ typedef char *rl_cpvfunc_t;
 #endif
 
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #include "aux.h"
 #include "config.h"
@@ -85,7 +87,7 @@ kbinds_reset(void)
 	if (stat(kbinds_file, &file_attrib) == -1) {
 		exit_status = create_kbinds_file();
 	} else {
-		char *cmd[] = {"rm", kbinds_file, NULL};
+		char *cmd[] = {"rm", "--", kbinds_file, NULL};
 		if (launch_execve(cmd, FOREGROUND, E_NOFLAG) == EXIT_SUCCESS)
 			exit_status = create_kbinds_file();
 		else
@@ -93,7 +95,7 @@ kbinds_reset(void)
 	}
 
 	if (exit_status == EXIT_SUCCESS)
-		_err('n', PRINT_PROMPT, _("%s: Restart the program for changes "
+		_err('n', PRINT_PROMPT, _("%s: kb: Restart the program for changes "
 			"to take effect\n"), PROGRAM_NAME);
 
 	return exit_status;
@@ -103,7 +105,7 @@ static int
 kbinds_edit(char *app)
 {
 	if (xargs.stealth_mode == 1) {
-		printf("%s: %s\n", PROGRAM_NAME, STEALTH_DISABLED);
+		printf("%s: kb: %s\n", PROGRAM_NAME, STEALTH_DISABLED);
 		return EXIT_SUCCESS;
 	}
 
@@ -135,7 +137,7 @@ kbinds_edit(char *app)
 	if (mtime_bfr == (time_t)attr.st_mtime)
 		return EXIT_SUCCESS;
 
-	_err('n', PRINT_PROMPT, _("%s: Restart the program for changes to "
+	_err('n', PRINT_PROMPT, _("%s: kb: Restart the program for changes to "
 			"take effect\n"), PROGRAM_NAME);
 	return EXIT_SUCCESS;
 }
@@ -147,10 +149,13 @@ kbinds_function(char **args)
 		return EXIT_FAILURE;
 
 	if (!args[1]) {
-		size_t i;
-		for (i = 0; i < kbinds_n; i++) {
-			printf("%s: %s\n", kbinds[i].key, kbinds[i].function);
+		if (kbinds_n == 0) {
+			printf("%s: kb: No keybindings defined\n", PROGRAM_NAME);
+			return EXIT_SUCCESS;
 		}
+		size_t i;
+		for (i = 0; i < kbinds_n; i++)
+			printf("%s: %s\n", kbinds[i].key, kbinds[i].function);
 
 		return EXIT_SUCCESS;
 	}
@@ -224,9 +229,11 @@ load_keybinds(void)
 
 		*tmp = '\0';
 
-		kbinds[kbinds_n++].function = savestring(line, strlen(line));
+		kbinds[kbinds_n].function = savestring(line, strlen(line));
+		kbinds_n++;
 	}
 
+	fclose(fp);
 	free(line);
 	return EXIT_SUCCESS;
 }
@@ -266,8 +273,13 @@ keybind_exec_cmd(char *str)
 		/* This call to prompt() just updates the prompt in case it was
 		 * modified, for example, in case of chdir, files selection, and
 		 * so on */
+		int rel = xargs.refresh_on_empty_line;
+		xargs.refresh_on_empty_line = 0;
+
 		char *buf = prompt();
 		free(buf);
+
+		xargs.refresh_on_empty_line = rel;
 	}
 
 	args_n = old_args;
@@ -346,6 +358,13 @@ static int
 rl_prepend_sudo(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
+#ifndef _NO_SUGGESTIONS
+	if (suggestion.printed && suggestion_buf) {
+		clear_suggestion(CS_FREEBUF);
+		fputs(df_c, stdout);
+	}
+#endif
+
 	int free_s = 1;
 	size_t len = 0;
 	char *t = getenv("CLIFM_SUDO_CMD"),
@@ -366,7 +385,7 @@ rl_prepend_sudo(int count, int key)
 		s = (char *)xnmalloc(len + 1, sizeof(char));
 		sprintf(s, "%s ", DEF_SUDO_CMD);
 	}
-	
+
 	int p = rl_point;
 	if (*rl_line_buffer == *s
 	&& strncmp(rl_line_buffer, s, len) == 0) {
@@ -412,11 +431,11 @@ my_insert_text(char *text, char *s, const char _s)
 	if (!text || !*text)
 		return;
 	{
-	if (wrong_cmd || cur_color == hq_c)
+	if (wrong_cmd == 1 || cur_color == hq_c)
 		goto INSERT_TEXT;
 
 #ifndef _NO_HIGHLIGHT
-	if (highlight) {
+	if (highlight == 1) {
 		/* Hide the cursor to minimize flickering */
 		fputs(HIDE_CURSOR, stdout);
 		/* Set text color to default */
@@ -428,10 +447,10 @@ my_insert_text(char *text, char *s, const char _s)
 		/* We only need to redisplay first suggested word if it contains
 		 * a highlighting char and it is not preceded by a space */
 		int redisplay = 0;
-		if (accept_first_word) {
+		if (accept_first_word == 1) {
 			for (i = 0; t[i]; i++) {
 				if (t[i] >= '0' && t[i] <= '9') {
-					if (!i || t[i - 1] != ' ') {
+					if (i == 0 || t[i - 1] != ' ') {
 						redisplay = 1;
 						break;
 					}
@@ -455,12 +474,12 @@ my_insert_text(char *text, char *s, const char _s)
 				case '~': /* fallthrough */
 				case '*': /* fallthrough */
 				case '#':
-					if (!i || t[i - 1] != ' ')
+					if (i == 0 || t[i - 1] != ' ')
 						redisplay = 1;
 					break;
 				default: break;
 				}
-				if (redisplay)
+				if (redisplay == 1)
 					break;
 			}
 		}
@@ -483,11 +502,11 @@ my_insert_text(char *text, char *s, const char _s)
 			q[0] = t[i];
 			q[1] = '\0';
 			rl_insert_text(q);
-			if (!accept_first_word || redisplay)
+			if (accept_first_word == 0 || redisplay == 1)
 				rl_redisplay();
 		}
 
-		if (s && redisplay) {
+		if (s && redisplay == 1) {
 			/* 1) rl_redisplay removes the suggestion from the current line
 			 * 2) We need rl_redisplay to correctly print highlighting colors
 			 * 3) We need to keep the suggestion when accepting only
@@ -497,7 +516,8 @@ my_insert_text(char *text, char *s, const char _s)
 			 * As a workaround, let's reprint the suggestion */
 			size_t slen = strlen(suggestion_buf);
 			*s = _s ? _s : ' ';
-			print_suggestion(suggestion_buf, slen + 1, suggestion.color);
+//			print_suggestion(suggestion_buf, slen + 1, suggestion.color);
+			print_suggestion(suggestion_buf, slen, suggestion.color);
 			*s = '\0';
 		}
 
@@ -543,28 +563,28 @@ rl_accept_suggestion(int count, int key)
 	 * word delimiter */
 	char *s = (char *)NULL, _s = 0;
 	int trimmed = 0;
-	if (accept_first_word) {
+	if (accept_first_word == 1) {
 		char *p = suggestion_buf + (rl_point - suggestion.offset);
 		/* Skip leading spaces */
 		while (*p == ' ')
 			p++;
 
-		while ((s = strpbrk(p, WORD_DELIMITERS)) == p)
+		/* Skip all consecutive word delimiters from the beginning of the
+		 * suggestion (P), except for slash and space */
+		while ((s = strpbrk(p, WORD_DELIMITERS)) == p && *s != '/' && *s != ' ')
 			p++;
 		if (s && s != p && *(s - 1) == ' ')
 			s = strpbrk(p, WORD_DELIMITERS);
 
-		if (s && *(s + 1)) {
+		if (s && *(s + 1)) { /* Trim suggestion after word delimiter */
 			if (*s == '/')
 				++s;
 			_s = *s;
 			*s = '\0';
 			trimmed = 1;
-		} else {
-			/* Last word: neither space nor slash */
+		} else { /* Last word: No word delimiter */
 			size_t len = strlen(suggestion_buf);
-			if (suggestion_buf[len - 1] != '/'
-			&& suggestion_buf[len - 1] != ' ')
+			if (suggestion_buf[len - 1] != '/' && suggestion_buf[len - 1] != ' ')
 				suggestion.type = NO_SUG;
 			accept_first_word = 0;
 			s = (char *)NULL;
@@ -574,10 +594,7 @@ rl_accept_suggestion(int count, int key)
 	rl_delete_text(suggestion.offset, rl_end);
 	rl_point = suggestion.offset;
 
-	if (!accept_first_word && (suggestion.type == BOOKMARK_SUG
-	|| suggestion.type == ALIAS_SUG || suggestion.type == ELN_SUG
-	|| suggestion.type == JCMD_SUG || suggestion.type == JCMD_SUG_NOACD
-	|| suggestion.type == BACKDIR_SUG || suggestion.type == SORT_SUG))
+	if (accept_first_word == 0 && (flags & BAEJ_SUGGESTION))
 		clear_suggestion(CS_KEEPBUF);
 
 	/* Complete according to the suggestion type */
@@ -601,15 +618,14 @@ rl_accept_suggestion(int count, int key)
 				break;
 			}
 		}
-		if (isquote && !backslash)
+		if (isquote == 1 && backslash == 0)
 			tmp = escape_str(suggestion_buf);
 
 		if (tmp) {
 			/* escape_str escapes leading tilde. But we don't want it
 			 * here. Remove it */
 			char *q;
-			if (cur_comp_type == TCMP_PATH && *tmp == '\\'
-			&& *(tmp + 1) == '~')
+			if (cur_comp_type == TCMP_PATH && *tmp == '\\' && *(tmp + 1) == '~')
 				q = tmp + 1;
 			else
 				q = tmp;
@@ -632,7 +648,7 @@ rl_accept_suggestion(int count, int key)
 	case HIST_SUG:
 		my_insert_text(suggestion_buf, NULL, 0); break;
 
-	#ifndef _NO_TAGS
+#ifndef _NO_TAGS
 	case TAGC_SUG: /* fallthrough */
 	case TAGS_SUG: /* fallthrough */
 	case TAGT_SUG: {
@@ -653,6 +669,14 @@ rl_accept_suggestion(int count, int key)
 		break;
 #endif /* _NO_TAGS */
 
+	case USER_SUG: {
+		char *p = escape_str(suggestion_buf);
+		my_insert_text(p ? p : suggestion_buf, NULL, 0);
+		rl_stuff_char('/');
+		free(p);
+		break;
+	}
+
 	default:
 		my_insert_text(suggestion_buf, NULL, 0);
 		rl_stuff_char(' ');
@@ -661,7 +685,7 @@ rl_accept_suggestion(int count, int key)
 
 	/* Move the cursor to the end of the line */
 	rl_point = rl_end;
-	if (!accept_first_word) {
+	if (accept_first_word == 0) {
 		suggestion.printed = 0;
 		free(suggestion_buf);
 		suggestion_buf = (char *)NULL;
@@ -794,33 +818,27 @@ static int
 rl_long(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
-	if (kbind_busy)
+	if (kbind_busy || xargs.disk_usage_analyzer == 1)
 		return EXIT_SUCCESS;
 
-	long_view = long_view ? 0 : 1;
+	long_view = long_view == 1 ? 0 : 1;
 
 	if (autols == 1) {
-		free_dirlist();
+		if (clear_screen == 0)
 		/* Without this putchar(), the first entries of the directories
 		 * list are printed in the prompt line */
-		putchar('\n');
-		list_dir();
+			putchar('\n');
+		reload_dirlist();
 	}
 
 	print_reload_msg(_("Long view mode %s\n"),
 		long_view == 1 ? _("enabled") : _("disabled"));
 	rl_reset_line_state();
 	return EXIT_SUCCESS;
-
-/*	if (clear_screen)
-		CLEAR;
-	keybind_exec_cmd("rf");
-	rl_reset_line_state();
-	return EXIT_SUCCESS; */
 }
 
 static int
-rl_folders_first(int count, int key)
+rl_dirs_first(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
 	if (kbind_busy)
@@ -831,16 +849,16 @@ rl_folders_first(int count, int key)
 		free_suggestion();
 #endif
 
-	list_folders_first = list_folders_first ? 0 : 1;
+	list_dirs_first = list_dirs_first ? 0 : 1;
 
 	if (autols == 1) {
-		free_dirlist();
-		putchar('\n');
-		list_dir();
+		if (clear_screen == 0)
+			putchar('\n');
+		reload_dirlist();
 	}
 
-	print_reload_msg(_("Folders first %s\n"),
-		list_folders_first ? "enabled" : "disabled");
+	print_reload_msg(_("Directories first %s\n"),
+		list_dirs_first ? "enabled" : "disabled");
 	rl_reset_line_state();
 	return EXIT_SUCCESS;
 }
@@ -855,9 +873,9 @@ rl_light(int count, int key)
 	light_mode = light_mode == 1 ? 0 : 1;
 
 	if (light_mode == 1)
-		_err(0, PRINT_PROMPT, _("%s->%s Switched to light mode\n"), mi_c, df_c);
+		_err(ERR_NO_LOG, PRINT_PROMPT, _("%s->%s Switched to light mode\n"), mi_c, df_c);
 	else
-		_err(0, PRINT_PROMPT, _("%s->%s Switched back to normal mode\n"), mi_c, df_c);
+		_err(ERR_NO_LOG, PRINT_PROMPT, _("%s->%s Switched back to normal mode\n"), mi_c, df_c);
 
 	if (autols == 1)
 		run_kb_cmd("rf");
@@ -878,9 +896,9 @@ rl_hidden(int count, int key)
 	show_hidden = show_hidden ? 0 : 1;
 
 	if (autols == 1) {
-		free_dirlist();
-		putchar('\n');
-		list_dir();
+		if (clear_screen == 0)
+			putchar('\n');
+		reload_dirlist();
 	}
 
 	print_reload_msg(_("Hidden files %s\n"), show_hidden ? "enabled" : "disabled");
@@ -1031,9 +1049,9 @@ rl_sort_next(int count, int key)
 
 	if (autols == 1) {
 		sort_switch = 1;
-		free_dirlist();
-		putchar('\n');
-		list_dir();
+		if (clear_screen == 0)
+			putchar('\n');
+		reload_dirlist();
 		sort_switch = 0;
 	}
 
@@ -1057,9 +1075,9 @@ rl_sort_previous(int count, int key)
 
 	if (autols == 1) {
 		sort_switch = 1;
-		free_dirlist();
-		putchar('\n');
-		list_dir();
+		if (clear_screen == 0)
+			putchar('\n');
+		reload_dirlist();
 		sort_switch = 0;
 	}
 
@@ -1230,8 +1248,9 @@ rl_previous_profile(int count, int key)
 
 	if (clear_screen) {
 		CLEAR;
-	} else
+	} else {
 		putchar('\n');
+	}
 
 	if (profile_set(profile_names[prev_prof]) == EXIT_SUCCESS) {
 		char *input = prompt();
@@ -1406,10 +1425,8 @@ rl_cmds_help(int count, int key)
 
 	char cmd[PATH_MAX];
 	snprintf(cmd, PATH_MAX - 1,
-		"export PAGER=\"less -p ^[0-9]+\\.[[:space:]]COMMANDS\"; man %s\n",
-		PNL);
+		"export PAGER=\"less -p ^[0-9]+\\.[[:space:]]COMMANDS\"; man %s\n", PNL);
 	int ret = run_man_cmd(cmd);
-
 	if (!ret)
 		return EXIT_FAILURE;
 	return EXIT_SUCCESS;
@@ -1446,8 +1463,19 @@ static int
 rl_ws1(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
-	if (cur_ws == 0)
+	if (rl_line_buffer && *rl_line_buffer)
+		rl_delete_text(0, rl_end);
+
+	if (cur_ws == 0) {
+		/* If the user attempts to switch to the same workspace she's
+		 * currently in, switch rather to the previous workspace */
+		if (xargs.toggle_workspaces == 1 && prev_ws != cur_ws) {
+			char t[16];
+			snprintf(t, sizeof(t), "ws %d", prev_ws + 1);
+			return run_kb_cmd(t);
+		}
 		return EXIT_SUCCESS;
+	}
 	return run_kb_cmd("ws 1");
 }
 
@@ -1455,8 +1483,17 @@ static int
 rl_ws2(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
-	if (cur_ws == 1)
+	if (rl_line_buffer && *rl_line_buffer)
+		rl_delete_text(0, rl_end);
+
+	if (cur_ws == 1) {
+		if (xargs.toggle_workspaces == 1 && prev_ws != cur_ws) {
+			char t[16];
+			snprintf(t, sizeof(t), "ws %d", prev_ws + 1);
+			return run_kb_cmd(t);
+		}
 		return EXIT_SUCCESS;
+	}
 	return run_kb_cmd("ws 2");
 }
 
@@ -1464,8 +1501,17 @@ static int
 rl_ws3(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
-	if (cur_ws == 2)
+	if (rl_line_buffer && *rl_line_buffer)
+		rl_delete_text(0, rl_end);
+
+	if (cur_ws == 2) {
+		if (xargs.toggle_workspaces == 1 && prev_ws != cur_ws) {
+			char t[16];
+			snprintf(t, sizeof(t), "ws %d", prev_ws + 1);
+			return run_kb_cmd(t);
+		}
 		return EXIT_SUCCESS;
+	}
 	return run_kb_cmd("ws 3");
 }
 
@@ -1473,8 +1519,17 @@ static int
 rl_ws4(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
-	if (cur_ws == 3)
+	if (rl_line_buffer && *rl_line_buffer)
+		rl_delete_text(0, rl_end);
+
+	if (cur_ws == 3) {
+		if (xargs.toggle_workspaces == 1 && prev_ws != cur_ws) {
+			char t[16];
+			snprintf(t, sizeof(t), "ws %d", prev_ws + 1);
+			return run_kb_cmd(t);
+		}
 		return EXIT_SUCCESS;
+	}
 	return run_kb_cmd("ws 4");
 }
 
@@ -1516,11 +1571,11 @@ rl_onlydirs(int count, int key)
 
 	only_dirs = only_dirs ? 0 : 1;
 
-	int exit_status = EXIT_SUCCESS;
+	int exit_status = exit_code;
 	if (autols == 1) {
-		free_dirlist();
-		putchar('\n');
-		exit_status = list_dir();
+		if (clear_screen == 0)
+			putchar('\n');
+		reload_dirlist();
 	}
 
 	print_reload_msg(_("Only directories %s\n"), only_dirs
@@ -1540,6 +1595,7 @@ print_highlight_string(char *s)
 	rl_delete_text(0, rl_end);
 	rl_point = rl_end = 0;
 	fputs(tx_c, stdout);
+	cur_color = tx_c;
 	char q[PATH_MAX];
 	for (i = 0; s[i]; i++) {
 		rl_highlight(s, i, SET_COLOR);
@@ -1571,12 +1627,12 @@ print_cmdhist_line(int n, int beg_line)
 	int rl_point_bk = rl_point;
 
 #ifndef _NO_HIGHLIGHT
-	if (highlight)
-		print_highlight_string(history[n]);
+	if (highlight == 1)
+		print_highlight_string(history[n].cmd);
 	else
 #endif
 	{
-		rl_replace_line(history[n], 1);
+		rl_replace_line(history[n].cmd, 1);
 	}
 
 	fputs(UNHIDE_CURSOR, stdout);
@@ -1606,7 +1662,7 @@ handle_cmdhist_beginning(int key)
 		}
 	}
 
-	if (!history[p])
+	if (!history[p].cmd)
 		return EXIT_FAILURE;
 
 	curhistindex = (size_t)p;
@@ -1622,9 +1678,9 @@ handle_cmdhist_middle(int key)
 	if (key == 65) { /* Up arrow key */
 		if (--p < 0) return EXIT_FAILURE;
 
-		while (p >= 0 && history[p]) {
-			if (strncmp(rl_line_buffer, history[p], (size_t)rl_point) == 0
-			&& strcmp(rl_line_buffer, history[p]) != 0) {
+		while (p >= 0 && history[p].cmd) {
+			if (strncmp(rl_line_buffer, history[p].cmd, (size_t)rl_point) == 0
+			&& strcmp(rl_line_buffer, history[p].cmd) != 0) {
 				found = 1; break;
 			}
 			p--;
@@ -1632,16 +1688,16 @@ handle_cmdhist_middle(int key)
 	} else { /* Down arrow key */
 		if (++p >= (int)current_hist_n)	return EXIT_FAILURE;
 
-		while (history[p]) {
-			if (strncmp(rl_line_buffer, history[p], (size_t)rl_point) == 0
-			&& strcmp(rl_line_buffer, history[p]) != 0) {
+		while (history[p].cmd) {
+			if (strncmp(rl_line_buffer, history[p].cmd, (size_t)rl_point) == 0
+			&& strcmp(rl_line_buffer, history[p].cmd) != 0) {
 				found = 1; break;
 			}
 			p++;
 		}
 	}
 
-	if (!found) {
+	if (found == 0) {
 		rl_ring_bell();
 		return EXIT_FAILURE;
 	}
@@ -1680,32 +1736,35 @@ rl_toggle_disk_usage(int count, int key)
 {
 	UNUSED(count); UNUSED(key);
 
-	/* Default values: however, THEY SHOULD BE THE VALUES SET BY THE USER! */
-	static int tsort = SNAME, tlong = 0, tdirsize = 0, tff = 1;
+	/* Default values */
+	static int dsort = DEF_SORT, dlong = DEF_LONG_VIEW, ddirsize = DEF_FULL_DIR_SIZE,
+		ddf = DEF_LIST_DIRS_FIRST, dapparent = DEF_APPARENT_SIZE;
 
 	if (xargs.disk_usage_analyzer == 1) {
 		xargs.disk_usage_analyzer = 0;
-		sort = tsort;
-		long_view = tlong;
-		full_dir_size = tdirsize;
-		list_folders_first = tff;
+		sort = dsort;
+		long_view = dlong;
+		full_dir_size = ddirsize;
+		list_dirs_first = ddf;
+		apparent_size = dapparent;
 	} else {
 		xargs.disk_usage_analyzer = 1;
-		tsort = sort;
-		tlong = long_view;
-		tdirsize = full_dir_size;
-		tff = list_folders_first;
+		dsort = sort;
+		dlong = long_view;
+		ddirsize = full_dir_size;
+		ddf = list_dirs_first;
+		dapparent = apparent_size;
 
 		sort = STSIZE;
-		long_view = full_dir_size = 1;
-		list_folders_first = 0;
+		long_view = full_dir_size = apparent_size = 1;
+		list_dirs_first = 0;
 	}
 
-	int exit_status = EXIT_SUCCESS;
+	int exit_status = exit_code;
 	if (autols == 1) {
-		free_dirlist();
-		putchar('\n');
-		exit_status = list_dir();
+		if (clear_screen == 0)
+			putchar('\n');
+		reload_dirlist();
 	}
 
 	print_reload_msg("Disk usage analyzer %s\n",
@@ -1739,6 +1798,12 @@ rl_del_last_word(int count, int key)
 	if (rl_point == 0)
 		return EXIT_SUCCESS;
 
+	char *end_buf = (char *)NULL;
+	if (rl_point < rl_end) { /* Somewhere before the end of the line */
+		end_buf = rl_copy_text(rl_point, rl_end);
+		rl_delete_text(rl_point, rl_end);
+	}
+
 	char *b = rl_line_buffer;
 
 	if (b[rl_point - 1] == '/' || b[rl_point - 1] == ' ') {
@@ -1756,6 +1821,11 @@ rl_del_last_word(int count, int key)
 	rl_delete_text(n, rl_end);
 	rl_end_undo_group();
 	rl_point = rl_end = n;
+	if (end_buf) {
+		rl_insert_text(end_buf);
+		rl_point = n;
+		free(end_buf);
+	}
 	rl_redisplay();
 
 #ifndef _NO_SUGGESTIONS
@@ -1773,6 +1843,47 @@ add_func_to_rl(void)
 {
 	rl_add_defun("my-test", rl_test, -1);
 } */
+
+static int
+rl_toggle_virtualdir_full_paths(int count, int key)
+{
+	UNUSED(count); UNUSED(key);
+	if (!stdin_tmp_dir || strcmp(stdin_tmp_dir, workspaces[cur_ws].path) != 0)
+		return EXIT_SUCCESS;
+
+	xchmod(stdin_tmp_dir, "0700");
+	xargs.virtual_dir_full_paths = xargs.virtual_dir_full_paths == 1 ? 0 : 1;
+
+	int i = (int)files;
+	while(--i >= 0) {
+		char *rp = realpath(file_info[i].name, NULL);
+		if (!rp) continue;
+
+		char *p = (char *)NULL;
+		if (xargs.virtual_dir_full_paths != 1) {
+			if ((p = strrchr(rp, '/')) && *(p + 1))
+				++p;
+		} else {
+			p = replace_slashes(rp, ':');
+		}
+
+		if (!p || !*p) continue;
+
+		if (renameat(AT_FDCWD, file_info[i].name, AT_FDCWD, p) == -1)
+			_err('w', PRINT_PROMPT, "renameat: %s: %s\n", file_info[i].name, strerror(errno));
+
+		if (xargs.virtual_dir_full_paths == 1) free(p);
+		free(rp);
+	}
+
+	xchmod(stdin_tmp_dir, "0500");
+	reload_dirlist();
+	print_reload_msg("Switched to %s names\n",
+		xargs.virtual_dir_full_paths == 1 ? "long" : "short");
+	rl_reset_line_state();
+
+	return EXIT_SUCCESS;
+}
 
 void
 readline_kbinds(void)
@@ -1847,6 +1958,7 @@ readline_kbinds(void)
 		rl_bind_keyseq(find_key("open-bookmarks"), rl_open_bm_file);
 
 		/* Settings */
+		rl_bind_keyseq(find_key("toggle-virtualdir-full-paths"), rl_toggle_virtualdir_full_paths);
 		rl_bind_keyseq(find_key("clear-msgs"), rl_clear_msgs);
 		rl_bind_keyseq(find_key("next-profile"), rl_next_profile);
 		rl_bind_keyseq(find_key("previous-profile"), rl_previous_profile);
@@ -1858,7 +1970,7 @@ readline_kbinds(void)
 		rl_bind_keyseq(find_key("toggle-hidden2"), rl_hidden);
 		rl_bind_keyseq(find_key("toggle-long"), rl_long);
 		rl_bind_keyseq(find_key("toggle-light"), rl_light);
-		rl_bind_keyseq(find_key("folders-first"), rl_folders_first);
+		rl_bind_keyseq(find_key("dirs-first"), rl_dirs_first);
 		rl_bind_keyseq(find_key("sort-previous"), rl_sort_previous);
 		rl_bind_keyseq(find_key("sort-next"), rl_sort_next);
 		rl_bind_keyseq(find_key("only-dirs"), rl_onlydirs);
@@ -1943,6 +2055,7 @@ readline_kbinds(void)
 		rl_bind_keyseq("\\e[23~", rl_open_bm_file);
 
 		/* Settings */
+		rl_bind_keyseq("\\M-w", rl_toggle_virtualdir_full_paths);
 		rl_bind_keyseq("\\M-t", rl_clear_msgs);
 		/*      rl_bind_keyseq("", rl_next_profile);
 		rl_bind_keyseq("", rl_previous_profile); */
@@ -1953,7 +2066,7 @@ readline_kbinds(void)
 		rl_bind_keyseq("\\M-.", rl_hidden);
 		rl_bind_keyseq("\\M-l", rl_long);
 		rl_bind_keyseq("\\M-y", rl_light);
-		rl_bind_keyseq("\\M-g", rl_folders_first);
+		rl_bind_keyseq("\\M-g", rl_dirs_first);
 		rl_bind_keyseq("\\M-z", rl_sort_previous);
 		rl_bind_keyseq("\\M-x", rl_sort_next);
 		rl_bind_keyseq("\\M-,", rl_onlydirs);
@@ -1969,6 +2082,7 @@ readline_kbinds(void)
 		rl_bind_keyseq("\\e[24~", rl_quit);
 	}
 
+	rl_bind_keyseq("\\C-l", rl_refresh);
 	rl_bind_keyseq("\x1b[A", rl_cmdhist);
 	rl_bind_keyseq("\x1b[B", rl_cmdhist);
 

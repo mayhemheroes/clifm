@@ -1,4 +1,4 @@
-# Coding suggestions for CliFM
+# Coding suggestions for _CliFM_
 
 **NOTE**: To keep a consintent style, run `clang-format` over all source files, including header files, using the `_clang-format` file (in `/src`) as the formatting model:
 
@@ -58,7 +58,7 @@ Assignements and comparissons (spaces around equal sign):
 x = y
 ```
 
-Proper casting. For example, do not write:
+Proper casting. For example, if the function resturns a pointer to a string, do not write:
 
 ```c
 return NULL;
@@ -79,8 +79,8 @@ Max line legnth: `80 characters/columns`. If an statement exceeds this number, s
 ```c
 if (condition)
 	printk(KERN_WARNING "Warning this is a long printk with "
-						"3 parameters a: %u b: %u "
-						"c: %u \n", a, b, c);
+		"3 parameters a: %u b: %u "
+		"c: %u \n", a, b, c);
 ```
 
 Make sure blank/empty lines do not contains TABS or spaces. In the same way, remove ending TABS and spaces.
@@ -115,10 +115,10 @@ strcpy(buf, src);
 or (using a safe version of `strncpy(3)`)
 ```c
 buf[PATH_MAX];
-xstrsncpy(buf, src, PATH_MAX);
+xstrsncpy(buf, src, sizeof(buf));
 ```
 
-**Note**: Both `xstrsncpy` and `xnmalloc` are safe implementations of `strcpy(3)` and `malloc(3)` respectively and are provided by CliFM itself.
+**Note**: Both `xstrsncpy` and `xnmalloc` are safe implementations of `strcpy(3)` and `malloc(3)` respectively and are provided by CliFM itself (see `strings.c` and `aux.c` respectivelly).
 
 These are just a few examples. There are plenty of resources out there on how to write secure code.
 
@@ -140,13 +140,13 @@ To make sure your structs are properly aligned, add `-Wpadded` to detect misalig
 
 **5**) If not obvious, comment what your code is trying to achieve: there is no good software without good documentation.
 
-## 3) CliFM's general code structure
+## 3) General code structure
 
 CliFM's source code consists of multiple C source files, being `main.c` the starting point and `helpers.h` the main header file. In `main.c` you'll find:
 
 **A)** Initialization stuff, like loading config files (see `config.c`), command line options (parsed by the `external_arguments()` function, in `init.c`), readline and keybindings initialization (see `readline.c` and `keybindings.c`), bookmarks, workspaces, history, and the like.
 
-**B)** Once everything is correctly initialized, an infinite loop, structured as a basic shell, takes place:
+**B)** Once everything is correctly initialized, an infinite loop (`run_main_loop`, in `main.c`), structured as a basic shell, takes place:
 1)  Take input
 
 2)  Parse input
@@ -166,27 +166,41 @@ This is the basic structure of _CliFM_: generally speaking, it is just a shell. 
 
 | Target | File(s) | Main function | Observation |
 | --- | --- | --- | --- |
-| Initialization | `main.c` | `main` | |
-| Default settings | `settings.h` | | |
-| Add a new command | `exec.c` | `exec_cmd` | Most of the times you want to your command avaialable for TAB completion and suggestions. See below. |
-| Add a new prompt feature | `prompt.c` (specially `decode_prompt`) | `prompt` | |
+| Initialization | `main.c` | `main` | See also `init.c` and `config.c` |
+| Default settings | `settings.h` | | See also `messages.h` and the icons header files |
+| Add a new command | `exec.c` | `exec_cmd` | Most of the time you want your command to be available for TAB completion and suggestions. See below. |
+| Add a new prompt feature | `prompt.c` | `prompt` | |
+| Tweak how we open files | `mime.c` | `mime_open` | |
+| Tweak how we bookmark files | `bookmarks.c` | `bookmarks_function` | |
+| Tweak how we trash files | `trash.c` | `trash_function` | |
+| Tweak how we select files | `selection.c` | `sel_function` and `deselect` | |
+| Tweak the quick search function | `search.c` | `search_glob` and `search_regex` | |
+| Tweak how we handle profiles | `profiles.c` | `profile_function` |
+| Tweak how we process file properties | `properties.c` | `print_entry_props` (long view) and `properties_function` (`p` command) | |
 | Modify/add keybindings | `keybindings.c` | `readline_kbinds` |
 | Icons | `icons.h`, `listing.c` | `list_dir` | Consult the [customizing icons](https://github.com/leo-arch/clifm/wiki/Advanced#customizing-icons) section |
-| TAB completion (including the FZF mode) | `readline.c` (`my_rl_completion`), `tabcomp.c` | |
-| Interface | `listing.c` (particularly `list_dir`) and `colors.c` | | |
+| TAB completion (including alternative completers) | `readline.c` and `tabcomp.c` | `my_rl_completion` and `tab_complete` respectively | |
+| Interface | `listing.c` and `colors.c` | `list_dir` and `set_colors` respectively | See also `sort.c` for our files sorting algorithms|
 | Directory jumper | `jump.c` | `dirjump` | |
-| Suggestions | `suggestions.c` and `keybinds.c` (see the `rl_accept_suggestion` function) | | |
+| Suggestions | `suggestions.c` and `keybinds.c` | `rl_suggestions` and `rl_accept_suggestion` respectively | |
 | Syntax highlighting | `highlight.c` | `rl_highlight` | See also `readline.c` and `keybinds.c` |
 | Autocommands | `autocmds.c` | `check_autocmds` | |
 | File names cleaner(`bleach`) | `name_cleaner.c` and `cleaner_table.h` | `bleach_files` | |
 | Improve my security | `sanitize.c` | `sanitize_cmd`, `sanitize_cmd_environ`, and `xsecure_env` | |
 | The tags system | `tags.c` | `tags_function` | |
+| `mounpoint` and `media` commands | `media.c` | `media_menu` | |
+| `net` command | `remotes.c` | `remotes_function` | |
+| Most file operation functions | `file_operations.c` | | |
+| Navigation stuff | `navigation.c` | | |
+| History and logs | `history.c` | | |
+| Plugins | `actions.c` | `run_action` | |
+| Miscellaneous/auxiliary functions | `aux.c`, `checks.c`,`misc.c`, and `strings.c` | | |
 
 ## 5) Compilation
 
 **Note**: For the list of dependencies, see the [installation page](https://github.com/leo-arch/clifm/wiki/Introduction#installation).
 
-_CliFM_ is compiled using `(g)cc` (`clang` and `tcc` work as well) as follows:
+_CliFM_ is compiled using `gcc` (or `clang`) as follows:
 
 1)  _Linux_:
 ```sh
@@ -231,25 +245,25 @@ upx clifm
 
 _CliFM_ allows you to enable or disable some features at compile time. If for whatever reason you don't plan to use a certain feature, it is better to remove this feature from the resulting binary: you'll get a (bit) faster and smaller executable. To do this, pass one or more of the following options to the compiler using the `-D` parameter. For example, to get a POSIX compliant executable without icons support:
 ```sh
-clang ... -D_BE_POSIX -D_NO_ICONS ...
+gcc ... -D_BE_POSIX -D_NO_ICONS ...
 ```
 
 | Option | Description |
 | --- | --- |
 | `_BE_POSIX` | Build a fully `POSIX.1-2008` compliant executable<sup>1</sup> |
 | `CLIFM_SUCKLESS` | Remove all code aimed at parsing config files. Configuration is done either via `settings.h` (and recompilation) or via [environment variables](https://github.com/leo-arch/clifm/wiki/Specifics#environment)<sup>2</sup> |
-| `_ICONS_IN_TERMINAL` | Use icons-in-terminal for icons instead of the default (emoji-icons) |
-| `_NERD` | Use Nerdfonts for icons instead of the default (emoji-icons) |
-| `_NO_ARCHIVING` | Disable archiving support |
-| `_NO_BLEACH` | Disable support for `Bleach`, the built-in file names cleaner |
+| `_ICONS_IN_TERMINAL` | Use icons-in-terminal for [icons](https://github.com/leo-arch/clifm/wiki/Advanced/#icons-smirk) instead of the default (emoji-icons) |
+| `_NERD` | Use Nerdfonts for [icons](https://github.com/leo-arch/clifm/wiki/Advanced/#icons-smirk) instead of the default (emoji-icons) |
+| `_NO_ARCHIVING` | Disable [archiving](https://github.com/leo-arch/clifm/wiki/Advanced#archives) support |
+| `_NO_BLEACH` | Disable support for [`Bleach`, the built-in file names cleaner](https://github.com/leo-arch/clifm/wiki/Introduction#bb-bleach-elnfile--n) |
 | `_NO_GETTEXT` | Disable translations support (via `gettext`) |
-| `_NO_HIGHLIGHT`| Disable syntax highlighting support |
-| `_NO_ICONS` | Disable icons support |
+| `_NO_HIGHLIGHT`| Disable [syntax highlighting](https://github.com/leo-arch/clifm/wiki/Specifics#syntax-highlighting) support |
+| `_NO_ICONS` | Disable [icons](https://github.com/leo-arch/clifm/wiki/Advanced/#icons-smirk) support |
 | `_NO_LIRA` | Disable [Lira](https://github.com/leo-arch/clifm/wiki/Specifics#resource-opener) support. Implies `_NO_MAGIC` |
 | `_NO_MAGIC` | Allow compilation without `libmagic` dependency<sup>3</sup> |
-| `_NO_SUGGESTIONS` | Disable suggestions support |
-| `_NO_TAGS` | Disable support for `Etiqueta`, the tags system |
-| `_NO_TRASH` | Disable trash support |
+| `_NO_SUGGESTIONS` | Disable [suggestions](https://github.com/leo-arch/clifm/wiki/Specifics#auto-suggestions) support |
+| `_NO_TAGS` | Disable support for [`Etiqueta`, the tags system](https://github.com/leo-arch/clifm/wiki/Common-Operations#tagging-files) |
+| `_NO_TRASH` | Disable [trash](https://github.com/leo-arch/clifm/wiki/Common-Operations#trashing-files) support |
 | `_TOURBIN_QSORT` | Use Alexey Tourbin faster [qsort implementation](https://github.com/svpv/qsort) instead of [qsort(3)](https://www.man7.org/linux/man-pages/man3/qsort.3.html) |
 
 <sup>1</sup> Only one feature is lost (Linux): Files birth time. We get this information via [statx(2)](https://man7.org/linux/man-pages/man2/statx.2.html), which is Linux specific.

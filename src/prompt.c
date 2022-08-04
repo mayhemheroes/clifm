@@ -26,7 +26,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 # include <wordexp.h>
 #endif
 #include <readline/readline.h>
@@ -174,24 +174,21 @@ reduce_path(char *_path)
 static inline char *
 gen_pwd(int c)
 {
-	char *temp = (char *)NULL;
-	/* Reduce HOME to "~" */
+	char *temp = (char *)NULL, *tmp_path = (char *)NULL;
 	int free_tmp_path = 0;
-	char *tmp_path = (char *)NULL;
 
-	if (strncmp(workspaces[cur_ws].path, user.home, user.home_len) == 0)
+	if (user.home && strncmp(workspaces[cur_ws].path, user.home, user.home_len) == 0)
 		tmp_path = home_tilde(workspaces[cur_ws].path, &free_tmp_path);
 
 	if (!tmp_path)
 		tmp_path = workspaces[cur_ws].path;
 
-	if (c == 'W') {
+	if (c == 'W')
 		temp = get_dir_basename(tmp_path);
-	} else if (c == 'p') {
+	else if (c == 'p')
 		temp = reduce_path(tmp_path);
-	} else { /* If c == 'w' */
+	else /* If c == 'w' */
 		temp = savestring(tmp_path, strlen(tmp_path));
-	}
 
 	if (free_tmp_path == 1)
 		free(tmp_path);
@@ -205,20 +202,27 @@ gen_workspace(void)
 	char s[__WS_STR_LEN];
 	char *cl = (char *)NULL;
 
-	switch(cur_ws + 1) {
-	case 1: cl = ws1_c; break;
-	case 2: cl = ws2_c; break;
-	case 3: cl = ws3_c; break;
-	case 4: cl = ws4_c; break;
-	case 5: cl = ws5_c; break;
-	case 6: cl = ws6_c; break;
-	case 7: cl = ws7_c; break;
-	case 8: cl = ws8_c; break;
-	default: break;
+	if (colorize == 1) {
+		switch(cur_ws + 1) {
+		case 1: cl = *ws1_c ? ws1_c : DEF_WS1_C; break;
+		case 2: cl = *ws2_c ? ws2_c : DEF_WS2_C; break;
+		case 3: cl = *ws3_c ? ws3_c : DEF_WS3_C; break;
+		case 4: cl = *ws4_c ? ws4_c : DEF_WS4_C; break;
+		case 5: cl = *ws5_c ? ws5_c : DEF_WS5_C; break;
+		case 6: cl = *ws6_c ? ws6_c : DEF_WS6_C; break;
+		case 7: cl = *ws7_c ? ws7_c : DEF_WS7_C; break;
+		case 8: cl = *ws8_c ? ws8_c : DEF_WS8_C; break;
+		default: break;
+		}
+	} else {
+		cl = df_c;
 	}
 
 //	snprintf(s, __WS_STR_LEN, "%s%d\001%s\002", cl, cur_ws + 1, df_c);
-	snprintf(s, __WS_STR_LEN, "%s%d", cl, cur_ws + 1);
+	if (workspaces[cur_ws].name)
+		snprintf(s, __WS_STR_LEN, "%s%s", cl, workspaces[cur_ws].name);
+	else
+		snprintf(s, __WS_STR_LEN, "%s%d", cl, cur_ws + 1);
 	return savestring(s, strlen(s));
 }
 
@@ -229,8 +233,8 @@ gen_exit_status(void)
 
 	char *temp = (char *)xnmalloc(code_len + 12 + MAX_COLOR, sizeof(char));
 	sprintf(temp, "%s%d\001%s\002",
-			(exit_code == 0) ? (colorize ? xs_c : "")
-			: (colorize ? xf_c : ""), exit_code, df_c);
+			(exit_code == 0) ? (colorize == 1 ? xs_c : "")
+			: (colorize == 1 ? xf_c : ""), exit_code, df_c);
 
 	return temp;
 }
@@ -368,8 +372,7 @@ static inline char *
 gen_non_print_sequence(const int c)
 {
 	char *temp = (char *)xnmalloc(2, sizeof(char));
-	*temp = (c == '[') ? RL_PROMPT_START_IGNORE
-			: RL_PROMPT_END_IGNORE;
+	*temp = (c == '[') ? RL_PROMPT_START_IGNORE : RL_PROMPT_END_IGNORE;
 	temp[1] = '\0';
 
 	return temp;
@@ -412,6 +415,7 @@ add_string(char **tmp, const int c, char **line, char **res, size_t *len)
 	free(*tmp);
 }
 
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 static inline void
 reset_ifs(const char *value)
 {
@@ -421,7 +425,6 @@ reset_ifs(const char *value)
 		unsetenv("IFS");
 }
 
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
 static inline void
 substitute_cmd(char **line, char **res, size_t *len)
 {
@@ -462,7 +465,7 @@ substitute_cmd(char **line, char **res, size_t *len)
 	wordfree(&wordbuf);
 	return;
 }
-#endif /* !__HAIKU__ && !__OpenBSD__*/
+#endif /* !__HAIKU__ && !__OpenBSD__ && !__ANDROID__ */
 
 static inline char *
 gen_emergency_prompt(void)
@@ -543,6 +546,7 @@ gen_notification(int flag)
 	case NOTIF_ROOT:
 		if (flags & ROOT_USR)
 			{ *p = 'R'; p[1] = '\0'; }
+		break;
 	case NOTIF_SEL:
 		if (sel_n > 0)
 			sprintf(p, "*%zu", sel_n);
@@ -688,13 +692,13 @@ ADD_STRING:
 			if (c == '\'' || c == '"')
 				continue;
 
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 			/* Command substitution */
 			if (c == '$' && *line == '(') {
 				substitute_cmd(&line, &result, &result_len);
 				continue;
 			}
-#endif /* __HAIKU__ && __OpenBSD__ */
+#endif /* !__HAIKU__ && !__OpenBSD__ && !__ANDROID__ */
 
 			size_t new_len = result_len + 2
 							+ (wrong_cmd ? (MAX_COLOR + 6) : 0);
@@ -747,7 +751,7 @@ static inline void
 print_welcome_msg(void)
 {
 	if (welcome_message) {
-		printf("%s%s > %s\n%s%s\n", wc_c, PROGRAM_NAME, _(PROGRAM_DESC),
+		printf("%s%s > %s\n%s%s\n", wc_c, _PROGRAM_NAME, _(PROGRAM_DESC),
 				df_c, _(HELP_MESSAGE));
 		welcome_message = 0;
 	}
@@ -760,7 +764,7 @@ _print_tips(void)
 		return;
 
 	static int first_run = 1;
-	if (first_run) {
+	if (first_run == 1) {
 		print_tips(0);
 		first_run = 0;
 	}
@@ -813,8 +817,13 @@ setenv_prompt(void)
 	sprintf(t, "%d", trash_n > 2 ? (int)trash_n - 2 : 0);
 	setenv("CLIFM_STAT_TRASH", t, 1);
 #endif
-	sprintf(t, "%d", (msgs_n && pmsg) ? (int)msgs_n : 0);
-	setenv("CLIFM_STAT_MSG", t, 1);
+	sprintf(t, "%d", (int)msgs.error);
+	setenv("CLIFM_STAT_ERROR_MSGS", t, 1);
+	sprintf(t, "%d", (int)msgs.warning);
+	setenv("CLIFM_STAT_WARNING_MSGS", t, 1);
+	sprintf(t, "%d", (int)msgs.notice);
+	setenv("CLIFM_STAT_NOTICE_MSGS", t, 1);
+
 	sprintf(t, "%d", cur_ws + 1);
 	setenv("CLIFM_STAT_WS", t, 1);
 	sprintf(t, "%d", exit_code);
@@ -832,9 +841,11 @@ set_prompt_length(size_t decoded_prompt_len)
 		len = (size_t)(decoded_prompt_len
 		+ (xargs.stealth_mode == 1 ? STEALTH_IND_SIZE : 0)
 		+ ((flags & ROOT_USR) ? ROOT_IND_SIZE : 0)
-		+ (sel_n ? N_IND : 0)
-		+ (trash_n ? N_IND : 0)
-		+ ((msgs_n && pmsg) ? N_IND : 0)
+		+ ((sel_n > 0) ? N_IND : 0)
+		+ ((trash_n > 0) ? N_IND : 0)
+		+ ((msgs.error > 0) ? N_IND : 0)
+		+ ((msgs.warning > 0) ? N_IND : 0)
+		+ ((msgs.notice > 0) ? N_IND : 0)
 		+ 6 + sizeof(tx_c) + 1 + 2);
 	} else {
 		len = (size_t)(decoded_prompt_len + 6 + sizeof(tx_c) + 1);
@@ -846,29 +857,18 @@ set_prompt_length(size_t decoded_prompt_len)
 static inline char *
 construct_prompt(const char *decoded_prompt)
 {
-	/* Construct indicators: MSGS, SEL, and TRASH */
-
-	/* Messages are categorized in three groups: errors, warnings, and
-	 * notices. The kind of message should be specified by the function
-	 * printing the message itself via a global enum: pmsg, with the
-	 * following values: NOMSG, ERROR, WARNING, and NOTICE. */
-	char msg_ind[N_IND], trash_ind[N_IND], sel_ind[N_IND];
-	*msg_ind = *trash_ind = *sel_ind = '\0';
+	/* Construct indicators: MSGS (ERR, WARN, and NOTICE), SEL, and TRASH */
+	/* Messages are categorized in three groups: errors, warnings, and notices */
+	char err_ind[N_IND], warn_ind[N_IND], notice_ind[N_IND], trash_ind[N_IND], sel_ind[N_IND];
+	*err_ind = *warn_ind = *notice_ind = *trash_ind = *sel_ind = '\0';
 
 	if (prompt_notif == 1) {
-		if (msgs_n) {
-			/* Errors take precedence over warnings, and warnings over
-			 * notices. That is to say, if there is an error message AND a
-			 * warning message, the prompt will always display the error
-			 * message sign: a red 'E'. */
-			switch (pmsg) {
-			case NOMSG:	break;
-			case ERROR:	snprintf(msg_ind, N_IND, "%sE%zu%s", em_c, msgs_n, RL_NC); break;
-			case WARNING: snprintf(msg_ind, N_IND, "%sW%zu%s", wm_c, msgs_n, RL_NC); break;
-			case NOTICE: snprintf(msg_ind, N_IND, "%sN%zu%s", nm_c, msgs_n, RL_NC); break;
-			default: break;
-			}
-		}
+		if (msgs.error > 0)
+			snprintf(err_ind, N_IND, "%sE%zu%s", em_c, msgs.error, RL_NC);
+		if (msgs.warning > 0)
+			snprintf(warn_ind, N_IND, "%sW%zu%s", wm_c, msgs.warning, RL_NC);
+		if (msgs.notice > 0)
+			snprintf(notice_ind, N_IND, "%sN%zu%s", nm_c, msgs.notice, RL_NC);
 
 		if (trash_n > 2)
 			snprintf(trash_ind, N_IND, "%sT%zu%s", ti_c, (size_t)trash_n - 2, RL_NC);
@@ -882,17 +882,18 @@ construct_prompt(const char *decoded_prompt)
 
 	if (prompt_notif == 1) {
 		snprintf(the_prompt, prompt_len,
-			"%s%s%s%s%s%s%s%s\001%s\002",
-			(flags & ROOT_USR) ? (colorize ? ROOT_IND : ROOT_IND_NO_COLOR) : "",
-			(msgs_n && pmsg) ? msg_ind : "",
+			"%s%s%s%s%s%s%s%s%s%s\001%s\002",
+			(flags & ROOT_USR) ? (colorize == 1 ? ROOT_IND : ROOT_IND_NO_COLOR) : "",
+			(msgs.error > 0) ? err_ind : "",
+			(msgs.warning > 0) ? warn_ind : "",
+			(msgs.notice > 0) ? notice_ind : "",
 			(xargs.stealth_mode == 1) ? si_c : "",
 			(xargs.stealth_mode == 1) ? STEALTH_IND : "",
-			(trash_n) ? trash_ind : "",
-			(sel_n) ? sel_ind : "",
+			(trash_n > 0) ? trash_ind : "",
+			(sel_n > 0) ? sel_ind : "",
 			decoded_prompt, RL_NC, tx_c);
 	} else {
-		snprintf(the_prompt, prompt_len, "%s%s\001%s\002", decoded_prompt,
-			RL_NC, tx_c);
+		snprintf(the_prompt, prompt_len, "%s%s\001%s\002", decoded_prompt, RL_NC, tx_c);
 	}
 
 	return the_prompt;
@@ -925,7 +926,8 @@ initialize_prompt_data(void)
 #endif
 
 	/* Print error messages */
-	if (print_msg && msgs_n) {
+//	if ((!(flags & GUI) || desktop_notis != 1) && print_msg == 1 && msgs_n > 0) {
+	if (print_msg == 1 && msgs_n > 0) {
 		fputs(messages[msgs_n - 1], stderr);
 		print_msg = 0; /* Print messages only once */
 	}
@@ -986,7 +988,7 @@ prompt(void)
 
 	if (!input || !*input) {
 		free(input);
-		if (flags & DELAYED_REFRESH) {
+		if ((flags & DELAYED_REFRESH) || xargs.refresh_on_empty_line == 1) {
 			flags &= ~DELAYED_REFRESH;
 			reload_dirlist();
 		}
@@ -1003,7 +1005,7 @@ static int
 list_prompts(void)
 {
 	if (prompts_n == 0) {
-		printf(_("%s: No extra prompts found. Using the default prompt\n"), PROGRAM_NAME);
+		printf(_("prompt: No extra prompts found. Using the default prompt\n"));
 		return EXIT_SUCCESS;
 	}
 
@@ -1022,7 +1024,7 @@ list_prompts(void)
 }
 
 static int
-change_prompt(const size_t n)
+switch_prompt(const size_t n)
 {
 	if (prompts[n].regular) {
 		free(encoded_prompt);
@@ -1035,6 +1037,7 @@ change_prompt(const size_t n)
 	}
 
 	prompt_notif = prompts[n].notifications;
+	warning_prompt = prompts[n].warning_prompt_enabled;
 
 	return EXIT_SUCCESS;
 }
@@ -1046,13 +1049,13 @@ set_prompt(char *name)
 		return EXIT_FAILURE;
 
 	if (prompts_n == 0) {
-		fprintf(stderr, _("%s: No extra prompts defined. Using the default prompt\n"), PROGRAM_NAME);
+		fprintf(stderr, _("prompt: No extra prompts defined. Using the default prompt\n"));
 		return EXIT_FAILURE;
 	}
 
 	char *p = dequote_str(name, 0);
 	if (!p) {
-		fprintf(stderr, "%s: %s: Error dequoting string\n", PROGRAM_NAME, name);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "prompt: %s: Error dequoting string\n", name);
 		return EXIT_FAILURE;
 	}
 
@@ -1061,11 +1064,11 @@ set_prompt(char *name)
 		if (*p != *prompts[i].name || strcmp(p, prompts[i].name) != 0)
 			continue;
 		free(p);
-		strncpy(cur_prompt_name, prompts[i].name, sizeof(cur_prompt_name) - 1);
-		return change_prompt((size_t)i);
+		xstrsncpy(cur_prompt_name, prompts[i].name, sizeof(cur_prompt_name) - 1);
+		return switch_prompt((size_t)i);
 	}
 
-	fprintf(stderr, _("%s: %s: No such prompt\n"), PROGRAM_NAME, p);
+	fprintf(stderr, _("prompt: %s: No such prompt\n"), p);
 	free(p);
 	return EXIT_FAILURE;
 }
@@ -1085,14 +1088,19 @@ set_default_prompt(void)
 static int
 edit_prompts_file(void)
 {
+	if (xargs.stealth_mode == 1) {
+		printf("%s: prompt: %s\n", PROGRAM_NAME, STEALTH_DISABLED);
+		return EXIT_SUCCESS;
+	}
+
 	if (!prompts_file || !*prompts_file) {
-		fprintf(stderr, "%s: No prompts file found\n", PROGRAM_NAME);
+		fprintf(stderr, "prompt: No prompts file found\n");
 		return EXIT_FAILURE;
 	}
 
 	struct stat a;
 	if (stat(prompts_file, &a) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, prompts_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "prompt: %s: %s\n", prompts_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 

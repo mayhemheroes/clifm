@@ -17,9 +17,9 @@
 # $HOME/.config/clifm/plugins/BFG.sh
 
 # A configuration file is available:
-# $HOME/.config/clifm/plugins/BFG.cfm
+# $HOME/.config/clifm/plugins/BFG.cfg
 # or
-# $XDG_DATA_DIRS/clifm/plugins/BFG.cfm
+# $XDG_DATA_DIRS/clifm/plugins/BFG.cfg (usually /usr/local/share/clifm/plugins/BFG.cfg)
 
 # How the files previewer works?
 # 1. The config file is read looking for predefined options and previewing
@@ -36,47 +36,27 @@
 #     determining file types and executing the corresponding previewing
 #     application.
 
-# Usage:
-# Left: go to parent directory
-# Right, Enter: cd into hovered directory or open hovered file and exit.
-# Home/end: go to first/last file
-# TAB: Select files
-# Ctrl-s: Confirm selection: send selected files to CliFM Selbox
-# Shift+up/down: Move one line up/down in the preview window
-# Alt+up/down: Move to the beginning/end in the preview window
-# At exit (pressing C-q) CliFM will change to the last directory visited
-# with FZF or open the last accepted file (Enter).
-# Press Esc to cancel and exit.
-
-# NOTE:
-# If using the GNU version of ls(1), it is recommended to set the LS option
-# (in BGH.cfm) to "gnu" (defaults to "posix") to get a list of files colored
-# according to file types
-
-
 HELP="Usage:
   Type in the prompt to filter the current list of files. Regular expressions are \
 allowed.
 
-  At exit (Ctrl-q) CliFM will change to the last directory visited or \
+  At exit (Ctrl-q) CliFM will change to the last visited directory or \
 open the last accepted file (Enter). Press Esc to cancel and exit.
+
+  Use the --edit command line option to edit the configuration file.
 
 Keybindings:
 
   * Left: Change to parent directory
-  * Right or Enter: Change to the highlighted directory or open the highlighted file and exit
+  * Right/Enter: Change to the highlighted directory or open the highlighted file and exit
   * Home/end: Change to first/last file in the files list
   * TAB: Select currently highlighted file
-  * Ctrl-s: Confirm selection (send files to CliFM's Selection Box)
+  * Ctrl-s: Select all
+  * Ctrl-d: Deselect all
+  * Ctrl-t: Toggle selection
+  * Alt-s: Confirm selection (do it before changing directory or the current selection will be lost)
   * Shift-up/down: Move one line up/down in the preview window
   * Alt-up/down: Move to the beginning/end in the preview window"
-
-if [ -n "$1" ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
-#	name="${CLIFM_PLUGIN_NAME:-$(basename "$0")}"
-	printf "Navigate/preview/select files via FZF\n"
-	printf "%s\n" "$HELP"
-	exit 0
-fi
 
 uz_cleanup() {
     rm "$FIFO_UEBERZUG" 2>/dev/null
@@ -84,7 +64,8 @@ uz_cleanup() {
 }
 
 get_bfg_cfg_file() {
-	FILE="${XDG_CONFIG_HOME:-$HOME/.config}/clifm/plugins/BFG.cfg"
+	HOME_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/clifm/plugins/BFG.cfg"
+	FILE="$HOME_FILE"
 
 	if [ -z "$FILE" ] || ! [ -f "$FILE" ]; then
 		FILE=""
@@ -109,6 +90,9 @@ get_bfg_cfg_file() {
 				FILE="/boot/system/non-packaged/data/clifm/plugins/BFG.cfg"
 			fi
 		fi
+
+		# Copy the file to HOME, so that we perform this check only once
+		[ -n "$FILE" ] && cp "$FILE" "$HOME_FILE" 2>/dev/null
 	fi
 
 	[ -n "$FILE" ] && printf "%s\n" "$FILE"
@@ -119,23 +103,6 @@ start_ueberzug() {
 	tail -f "$FIFO_UEBERZUG" \
 	| ueberzug layer --silent --parser json > /dev/null 2>&1 &
 }
-
-HELP="Usage:
-  Type in the prompt to filter the current list of files. Regular expressions are \
-allowed.
-
-  At exit (Ctrl-q) CliFM will change to the last directory visited or \
-open the last accepted file (Enter). Press Esc to cancel and exit.
-
-Keybindings:
-
-  * Left: Change to parent directory
-  * Right or Enter: Change to the highlighted directory or open the highlighted file and exit
-  * Home/end: Change to first/last file in the files list
-  * TAB: Select currently highlighted file
-  * Ctrl-s: Confirm selection (send files to CliFM's Selection Box)
-  * Shift-up/down: Move one line up/down in the preview window
-  * Alt-up/down: Move to the beginning/end in the preview window"
 
 fcd() {
 	if [ "$#" -ne 0 ]; then
@@ -155,7 +122,8 @@ fcd() {
 		file="$(printf "%s\n" "$lsd" | fzf \
 			--height="${fzfheight:-$fzf_height}" \
 			--color="$(get_fzf_colors)" \
-			--bind "ctrl-s:execute(touch $TMP_SEL)+accept" \
+			--bind "alt-s:execute(touch $TMP_SEL)+accept" \
+			--bind "ctrl-s:select-all,ctrl-d:deselect-all,ctrl-t:toggle-all" \
 			--bind "right:accept,left:top+accept" \
 			--bind "insert:clear-query" \
 			--bind "home:top,end:page-down" \
@@ -176,7 +144,7 @@ $FZF_HEADER" --marker="*" --preview-window=:wrap "$(fzf_borders)" \
 		# If FZF returned no file, exit
 		[ ${#file} -eq 0 ] && return 0
 
-		# If we have selected files, send them to CliFM Selbox
+		# If we have selected files, send them to the CliFM Selbox
 		if [ -f "$TMP_SEL" ]; then
 			echo "$file" > "$TMP_SEL"
 			while read -r line; do
@@ -212,7 +180,7 @@ $FZF_HEADER" --marker="*" --preview-window=:wrap "$(fzf_borders)" \
 main() {
 
 	if ! type fzf > /dev/null 2>&1; then
-		printf "CliFM: fzf: Command not found\n" >&2
+		printf "clifm: fzf: Command not found\n" >&2
 		exit 127
 	fi
 
@@ -220,8 +188,8 @@ main() {
 	rm -rf -- "$TMP_SEL"
 	BFG_CFG_FILE="$(get_bfg_cfg_file)"
 	if [ -z "$BFG_CFG_FILE" ]; then
-		printf "CliFM: BFG.cfg: No such file or directory\n" >&2
-		exit 1
+		printf "clifm: BFG.cfg: No such file or directory\n" >&2
+		exit 2
 	fi
 
 	# Do we have GNU ls?
@@ -229,8 +197,8 @@ main() {
 		export ls_cmd="ls -Ap --group-directories-first --color=always --indicator-style=none"
 		export POSIX_LS=0
 	else
-		ls_cmd="ls -Ap"
-		POSIX_LS=1
+		export ls_cmd="ls -Ap"
+		export POSIX_LS=1
 	fi
 
 	# OpenBSD file(1) version has no --mime-encoding option
@@ -466,9 +434,9 @@ main() {
 	export COLORS
 	COLORS="$(tput colors)"
 
-	if [ -z "$ls_cmd" ]; then
-		export ls_cmd="ls -Ap --group-directories-first --color=always --indicator-style=none"
-	fi
+#	if [ -z "$ls_cmd" ]; then
+#		export ls_cmd="ls -Ap --group-directories-first --color=always --indicator-style=none"
+#	fi
 
 	# This is the previewer script, similar to Ranger's scope.sh
 	if [ -z "$BFG_FILE" ]; then
@@ -477,7 +445,7 @@ main() {
 		if ! [ -f "$BFG_FILE" ]; then
 			BFG_FILE="${BFG_CFG_FILE%.*}.sh"
 			if ! [ -f "$BFG_FILE" ]; then
-				printf "CliFM: BFG.sh: No such file or directory\n" >&2
+				printf "clifm: BFG.sh: No such file or directory\n" >&2
 				exit 1
 			fi
 		fi
@@ -721,10 +689,26 @@ main() {
 					#       MAIN        #
 					#####################
 
+if [ -n "$1" ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
+#	name="${CLIFM_PLUGIN_NAME:-$(basename "$0")}"
+	printf "Navigate/preview/select files via FZF\n"
+	printf "%s\n" "$HELP"
+	exit 0
+fi
+
+if [ -n "$1" ] && [ "$1" = "--edit" ]; then
+	f="$(get_bfg_cfg_file)"
+	if [ -z "$f" ]; then
+		printf "clifm: BFG.cfg: No such file or directory\n" >&2
+		exit 2
+	fi
+	"${EDITOR:-VISUAL:-nano}" "$f" && exit 0
+	exit 1
+fi
 
 # Source our plugins helper
 if [ -z "$CLIFM_PLUGINS_HELPER" ] || ! [ -f "$CLIFM_PLUGINS_HELPER" ]; then
-	printf "CliFM: Unable to find plugins-helper file\n" >&2
+	printf "clifm: Unable to find plugins-helper file\n" >&2
 	exit 1
 fi
 # shellcheck source=/dev/null

@@ -52,16 +52,28 @@
 # endif /* RL_READLINE_VERSION >= 0x0801 */
 #endif /* RL_READLINE_VERSION */
 
+static char *
+find_digit(char *str)
+{
+	if (!str || !*str)
+		return (char *)NULL;
+
+	while (*str) {
+		if (*str >= '1' && *str <= '9')
+			return str;
+		str++;
+	}
+
+	return (char *)NULL;
+}
+
 /* Check whether a given command needs ELN's to be expanded/completed/suggested
  * Returns 1 if yes or 0 if not */
 int
 __expand_eln(const char *text)
 {
 	char *l = rl_line_buffer;
-	if (!l || !*l)
-		return 0;
-
-	if (!is_number(text))
+	if (!l || !*l || !is_number(text))
 		return 0;
 
 	int a = atoi(text); /* Only expand numbers matching ELN's */
@@ -75,50 +87,23 @@ __expand_eln(const char *text)
 			return 0;
 	}
 
-	switch(*l) {
-		case 'b': /* bookmarks (only expand ELN's for 'add') */
-			if (l[1] == 'm' && l[2] == ' ') {
-				if (strncmp(l + 3, "add ", 4) == 0 || strncmp(l + 3, "a ", 2) == 0)
-					return 1;
-				return 0;
-			}
-			if (strncmp(l, "bookmarks ", 10) == 0) {
-				if (strncmp(l + 10, "add ", 4) == 0 || strncmp(l + 10, "a ", 2) == 0)
-					return 1;
-				return 0;
-			}
-			break;
-		case 'c': /* cs (color schemes) */
-			if (l[1] == 's' && l[2] == ' ')
-				return 0;
-			break;
-		case 'm': /* mf (max files) */
-			if (l[1] == 'f' && l[2] == ' ')
-				return 0;
-			break;
-		case 'j': /* jo */
-			if (l[1] == 'o' && l[2] == ' ')
-				return 0;
-			break;
-		case 'n':
-			if (strncmp(l, "net ", 4) == 0)
-				return 0;
-			break;
-		case 'p': /* profiles */
-			if ((l[1] == 'f' && l[2] == ' ') || strncmp(l, "prof ", 5) == 0
-			|| strncmp(l, "profile ", 8) == 0)
-				return 0;
-			break;
-		case 's': /* sort */
-			if ((l[1] == 't' && l[2] == ' ') || strncmp(l, "sort ", 5) == 0)
-				return 0;
-			break;
-		case 'w': /* workspaces */
-			if (l[1] == 's' && l[2] == ' ')
-				return 0;
-			break;
-		default: break;
+	char *p = strchr(l, ' ');
+	char t = ' ';
+	if (!p && (p = find_digit(l)) )
+		t = *p;
+
+	if (!p)
+		return 1;
+
+	*p = '\0';
+	flags |= STATE_COMPLETING;
+	if (is_internal_c(l) && !is_internal_f(l)) {
+		*p = t;
+		flags &= ~STATE_COMPLETING;
+		return 0;
 	}
+	flags &= ~STATE_COMPLETING;
+	*p = t;
 
 	return 1;
 }
@@ -204,6 +189,50 @@ remove_bold_attr(char **str)
 	}
 }
 
+/* Convert the file named STR (as absolute path) into a more friendly format
+ * Change absolute paths into:
+ * "./" if file is in CWD
+ * "~" if file is in HOME
+ * The reformated file name is returned if actually reformated, in which case
+ * the returned value should be freed by the caller
+ * Otherwise, a pointer to the original string is returned and must not be
+ * freed by the caller
+ * char *ret = abbreviate_file_name(str);
+ * ...
+ * if (ret && ret != str)
+ *     free(ret); */
+char *
+abbreviate_file_name(char *str)
+{
+	if (!str || !*str)
+		return (char *)NULL;
+
+	char *name = (char *)NULL;
+	size_t len = strlen(str);
+	size_t wlen = (workspaces && workspaces[cur_ws].path) ? strlen(workspaces[cur_ws].path) : 0;
+
+	/* If STR is in CWD -> ./STR */
+	if (workspaces && workspaces[cur_ws].path && wlen > 1 && len > wlen
+	&& strncmp(str, workspaces[cur_ws].path, wlen) == 0
+	&& *(str + wlen) == '/') {
+		name = (char *)xnmalloc(strlen(str + wlen + 1) + 3, sizeof(char));
+		sprintf(name, "./%s", str + wlen + 1);
+		return name;
+	}
+
+	/* If STR is in HOME, reduce HOME to tilde (~) */
+	int free_ptr = 0;
+	char *tmp = home_tilde(str, &free_ptr);
+	if (tmp && tmp != str) {
+		name = savestring(tmp, strlen(tmp));
+		if (free_ptr == 1)
+			free(tmp);
+		return name;
+	}
+
+	return str;
+}
+
 char *
 normalize_path(char *src, size_t src_len)
 {
@@ -216,8 +245,8 @@ normalize_path(char *src, size_t src_len)
 	if (strchr(src, '\\')) {
 		tmp = dequote_str(src, 0);
 		if (!tmp) {
-			fprintf(stderr, _("%s: %s: Error deescaping string\n"),
-					PROGRAM_NAME, src);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error deescaping string\n"),
+				PROGRAM_NAME, src);
 			return (char *)NULL;
 		}
 		size_t tlen = strlen(tmp);
@@ -232,8 +261,8 @@ normalize_path(char *src, size_t src_len)
 	if (*src == '~') {
 		tmp = tilde_expand(src);
 		if (!tmp) {
-			fprintf(stderr, _("%s: %s: Error expanding tilde\n"),
-					PROGRAM_NAME, src);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error expanding tilde\n"),
+				PROGRAM_NAME, src);
 			return (char *)NULL;
 		}
 		size_t tlen = strlen(tmp);
@@ -314,9 +343,7 @@ rl_ring_bell(void)
 {
 	switch(bell) {
 	case BELL_AUDIBLE:
-		fputs("\007", stderr);
-		fflush(stderr);
-		return;
+		fputs("\007", stderr); fflush(stderr); return;
 
 	case BELL_FLASH:
 		fputs(SET_RVIDEO, stderr);
@@ -350,8 +377,6 @@ rl_ring_bell(void)
 	case BELL_NONE: /* fallthrough */
 	default: return;
 	}
-
-	return;
 }
 
 /* The following three functions were taken from
@@ -567,7 +592,7 @@ open_fstream_r(char *name, int *fd)
 		return (FILE *)NULL;
 	}
 
-	return fp;	
+	return fp;
 }
 
 /* Create a file for writing. Return a file stream associated to a file
@@ -624,32 +649,19 @@ hex2int(const char *str)
 			n[i] = str[i] - '0';
 		} else {
 			switch (str[i]) {
-			case 'A':
-			case 'a':
-				n[i] = 10;
-				break;
-			case 'B':
-			case 'b':
-				n[i] = 11;
-				break;
-			case 'C':
-			case 'c':
-				n[i] = 12;
-				break;
-			case 'D':
-			case 'd':
-				n[i] = 13;
-				break;
-			case 'E':
-			case 'e':
-				n[i] = 14;
-				break;
-			case 'F':
-			case 'f':
-				n[i] = 15;
-				break;
-			default:
-				break;
+			case 'A': /* fallthrough */
+			case 'a': n[i] = 10; break;
+			case 'B': /* fallthrough */
+			case 'b': n[i] = 11; break;
+			case 'C': /* fallthrough */
+			case 'c': n[i] = 12; break;
+			case 'D': /* fallthrough */
+			case 'd': n[i] = 13; break;
+			case 'E': /* fallthrough */
+			case 'e': n[i] = 14; break;
+			case 'F': /* fallthrough */
+			case 'f': n[i] = 15; break;
+			default: break;
 			}
 		}
 	}
@@ -818,17 +830,15 @@ get_cmd_path(const char *cmd)
 	return (char *)NULL;
 }
 
-/* Convert FILE_SIZE to human readeable form */
+/* Convert SIZE to human readeable form (at most 2 decimal places)
+ * Returns a string of at most MAX_UNIT_SIZE, defined in aux.h */
 char *
 get_size_unit(off_t size)
 {
-#define MAX_UNIT_SIZE 10
-	/* Max size type length == 10 == "1023.99KB\0" */
+	/* MAX_UNIT_SIZE == 10 == "1023.99YB\0" */
 	char *str = xnmalloc(MAX_UNIT_SIZE, sizeof(char));
 
-	float base = 1024;
-	if (xargs.si == 1)
-		base = 1000;
+	float base = xargs.si == 1 ? 1000 : 1024;
 
 	size_t n = 0;
 	float s = (float)size;
@@ -839,12 +849,12 @@ get_size_unit(off_t size)
 	}
 
 	int x = (int)s;
-	/* If s - x == 0, then S has no reminder (zero)
+	/* If (s - x || s - (float)x) == 0, then S has no reminder (zero)
 	 * We don't want to print the reminder when it is zero */
 
 	const char *const u = "BKMGTPEZY";
 	snprintf(str, MAX_UNIT_SIZE, "%.*f%c%c", (s == 0 || s - (float)x == 0) /* NOLINT */
-			? 0 : 2, (double)s, u[n], (u[n] != 'B' && xargs.si == 1) ? 'B' : 0);
+		? 0 : 2, (double)s, u[n], (u[n] != 'B' && xargs.si == 1) ? 'B' : 0);
 
 	return str;
 }
@@ -870,14 +880,14 @@ dir_size(char *dir)
 	if (r == -1)
 		return (-1);
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(_BE_POSIX)
 	char block_size[16];
 	if (xargs.si == 1)
 		strcpy(block_size, "--block-size=KB");
 	else
 		strcpy(block_size, "--block-size=K");
 
-	if (xargs.apparent_size != 1) {
+	if (apparent_size != 1) {
 		char *cmd[] = {"du", "-s", block_size, dir, NULL};
 		launch_execve(cmd, FOREGROUND, E_NOSTDERR);
 	} else {
@@ -993,7 +1003,7 @@ xrealloc(void *ptr, size_t size)
 
 	if (!p) {
 		_err(0, NOPRINT_PROMPT, _("%s: %s failed to allocate %zu bytes\n"),
-				PROGRAM_NAME, __func__, size);
+			PROGRAM_NAME, __func__, size);
 		exit(ENOMEM);
 	}
 
@@ -1007,7 +1017,7 @@ xcalloc(size_t nmemb, size_t size)
 
 	if (!p) {
 		_err(0, NOPRINT_PROMPT, _("%s: %s failed to allocate %zu bytes\n"),
-				PROGRAM_NAME, __func__, nmemb * size);
+			PROGRAM_NAME, __func__, nmemb * size);
 		exit(ENOMEM);
 	}
 
@@ -1021,7 +1031,7 @@ xnmalloc(size_t nmemb, size_t size)
 
 	if (!p) {
 		_err(0, NOPRINT_PROMPT, _("%s: %s failed to allocate %zu bytes\n"),
-				PROGRAM_NAME, __func__, nmemb * size);
+			PROGRAM_NAME, __func__, nmemb * size);
 		exit(ENOMEM);
 	}
 
@@ -1035,9 +1045,13 @@ char
 xgetchar(void)
 {
 	struct termios oldt, newt;
-	char c;
+	char c = 0;
 
-	tcgetattr(STDIN_FILENO, &oldt);
+	if (tcgetattr(STDIN_FILENO, &oldt) == -1) {
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: tcgetattr: %s\n",
+			PROGRAM_NAME, strerror(errno));
+		return 0;
+	}
 	newt = oldt;
 	newt.c_lflag &= (tcflag_t)~(ICANON | ECHO);
 	tcsetattr(STDIN_FILENO, TCSANOW, &newt);

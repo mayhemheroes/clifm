@@ -1,4 +1,4 @@
-﻿/* strings.c -- misc string manipulation function */
+﻿/* strings.c -- misc string manipulation functions */
 
 /*
  * This file is part of CliFM
@@ -33,15 +33,24 @@
 #include <ctype.h>
 #include <time.h>
 #include <wchar.h>
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 # include <wordexp.h>
 #endif
 #include <limits.h>
 #include <dirent.h>
+#include <errno.h>
+
+#if defined(__OpenBSD__)
+typedef char *rl_cpvfunc_t;
+# include <ereadline/readline/readline.h>
+#else
+# include <readline/readline.h>
+#endif /* __OpenBSD__ */
 
 #include "aux.h"
 #include "checks.h"
 #include "exec.h"
+#include "misc.h"
 #include "navigation.h"
 #include "readline.h"
 #include "sort.h"
@@ -49,6 +58,7 @@
 
 char len_buf[ARG_MAX * sizeof(wchar_t)] __attribute__((aligned));
 
+/* Macros for xstrverscmp() */
 /* states: S_N: normal, S_I: comparing integral part, S_F: comparing
            fractionnal parts, S_Z: idem but with leading Zeroes only */
 #define S_N 0x0
@@ -60,7 +70,77 @@ char len_buf[ARG_MAX * sizeof(wchar_t)] __attribute__((aligned));
 #define VCMP 2
 #define VLEN 3
 
-#define MAX_STR_SZ 4096
+/* Max string length for strings passed to xstrnlen()
+ * Minimize the danger of non-null terminated strings
+ * However, nothing beyond MAX_STR_LEN length will be correctly measured */
+#define MAX_STR_LEN 4096
+
+char *
+replace_slashes(char *str, const char c)
+{
+	if (*str == '/')
+		str++;
+
+	char *p = savestring(str, strlen(str));
+	char *q = p;
+
+	while (*q) {
+		if (*q == '/' && (q == p || *(q - 1) != '\\'))
+			*q = c;
+		q++;
+	}
+
+	return p;
+}
+
+/* Find the character C in the string S ignoring case
+ * Returns a pointer to the matching char in S if C was found, or NULL otherwise */
+static char *
+xstrcasechr(char *s, char c)
+{
+	if (!s || !*s)
+		return (char *)NULL;
+
+	char uc = TOUPPER(c);
+	while(*s) {
+		if (TOUPPER(*s) != uc) {
+			s++;
+			continue;
+		}
+		return s;
+	}
+
+	return (char *)NULL;
+}
+
+/* A very basic fuzzy strings matcher
+ * Returns 1 if match (S1 is contained in S2) or zero otherwise
+ * For the time being, fuzzy match does not work with standard completion
+ * (fzftab == 0) */
+int
+fuzzy_match(char *s1, char *s2, const int case_sens)
+{
+	if (!s1 || !*s1 || !s2 || !*s2 || fzftab == 0)
+		return 0;
+
+	if (case_sens ? strstr(s2, s1) : strcasestr(s2, s1))
+		return 1;
+
+	char *hs = s2;
+	while (*s1) {
+		char *m = case_sens ? strchr(hs, *s1) : xstrcasechr(hs, *s1);
+		if (!m)
+			break;
+		m++;
+		hs = m;
+		s1++;
+	}
+
+	if (!*s1)
+		return 1;
+
+	return 0;
+}
 
 /* A reverse strpbrk(3): returns a pointer to the LAST char in S matching
  * a char in ACCEPT, or NULL if no match is found */
@@ -117,16 +197,19 @@ xstrcasestr(char *a, char *b)
 }
 #endif /* __linux && _BE_POSIX */
 
-/* Just a strlen that sets a read limit in case of non-null terminated
- * string */
+/* Just a strlen that sets a read limit in case of non-null terminated string */
 size_t
 xstrnlen(const char *restrict s)
 {
-	return (size_t)((char *)memchr(s, '\0', MAX_STR_SZ) - s);
+	// cppcheck-suppress nullPointer
+	return (size_t)((char *)memchr(s, '\0', MAX_STR_LEN) - s);
 }
 
 /* Taken from NNN's source code: very clever. Copy SRC into DST
- * and return the string size all at once */
+ * and return the string size all at once
+ * Besides, it's safer than strncpy(3): it always NULL terminates the
+ * destination string (DST), even if no NUL char if found in the first
+ * N characters of SRC */
 size_t
 xstrsncpy(char *restrict dst, const char *restrict src, size_t n)
 {
@@ -148,8 +231,7 @@ xstrsncpy(char *restrict dst, const char *restrict src, size_t n)
 
 /* Compare S1 and S2 as strings holding indices/version numbers,
    returning less than, equal to or greater than zero if S1 is less than,
-   equal to or greater than S2 (for more info, see the texinfo doc).
-*/
+   equal to or greater than S2 (for more info, see the texinfo doc) */
 int
 xstrverscmp(const char *s1, const char *s2)
 {
@@ -507,7 +589,7 @@ replace_substr(char *haystack, char *needle, char *rep)
 char *
 gen_rand_str(size_t len)
 {
-	char charset[] = "0123456789#%-_"
+	const char charset[] = "0123456789#%-_"
 			 "abcdefghijklmnopqrstuvwxyz"
 			 "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -569,13 +651,13 @@ remove_quotes(char *str)
 	return (char *)NULL;
 }
 
-/* This function takes a string as argument and split it into substrings
+/* This function takes a string as argument and splits it into substrings
  * taking tab, new line char, and space as word delimiters, except when
  * they are preceded by a quote char (single or double quotes) or in
  * case of command substitution ($(cmd) or `cmd`), in which case
- * eveything after the corresponding closing char is taken as one single
+ * eveything before the corresponding closing char is taken as one single
  * string. It also escapes special chars. It returns an array of
- * splitted strings (without leading and terminating spaces) or NULL if
+ * split strings (without leading and terminating spaces) or NULL if
  * str is NULL or if no substring was found, i.e., if str contains
  * only spaces. */
 char **
@@ -678,8 +760,8 @@ split_str(const char *str, const int update_args)
 			quote = *str;
 			str++;
 
-			/* Copy into the buffer whatever is after the first quote
-			 * up to the last quote or NULL */
+			/* Copy into the buffer whatever is after the first quote up to
+			 * the last quote or NULL */
 			while (*str && *str != quote) {
 				/* If char has special meaning, escape it */
 				if (!(flags & IN_BOOKMARKS_SCREEN) && is_quote_char(*str)) {
@@ -698,8 +780,7 @@ split_str(const char *str, const int update_args)
 			 * *STR is a null byte there was not ending quote */
 			if (!*str) {
 				fprintf(stderr, _("%s: Missing '%c'\n"), PROGRAM_NAME, quote);
-				/* Free the current buffer and whatever was already
-				 * allocated */
+				/* Free the current buffer and whatever was already allocated */
 				free(buf);
 				buf = (char *)NULL;
 				int i = (int)words;
@@ -755,7 +836,7 @@ split_str(const char *str, const int update_args)
 
 	/* The while loop stops when the null byte is reached, so that the last
 	 * substring is not printed, but still stored in the buffer. Therefore,
-	 * we need to add it, if not empty, to our subtrings array */
+	 * we need to add it, if not empty, to our substrings array */
 	buf[buf_len] = '\0';
 
 	if (buf_len > 0) {
@@ -810,51 +891,6 @@ check_fused_param(const char *str)
 
 	if (ok && c <= 1)
 		return 1;
-	return 0;
-}
-
-/* Check CMD against a list of internal commands taking ELN's or numbers
- * as parameters. Used by split_fusedcmd() */
-int
-is_internal_f(const char *restrict cmd)
-{
-	const char *int_cmds[] = {
-	    "ac", "ad",
-		"bb", "bleach",
-	    "bm", "bookmarks",
-	    "br", "bulk",
-	    "c", "cp",
-	    "cd",
-		"d", "dup",
-		"ds", "desel",
-	    "exp",
-	    "l", "ln", "le",
-	    "m", "mv",
-	    "md", "mkdir",
-	    "mf",
-	    "n", "new",
-	    "o", "open", "ow",
-	    "p", "pp", "pr", "prop",
-		"paste",
-	    "pin",
-	    "r", "rm",
-	    "rr",
-	    "s", "sel",
-	    "st", "sort",
-	    "t", "tr", "trash",
-		"tag", "ta",
-	    "te",
-	    "unlink",
-	    "ws",
-	    NULL};
-
-	int i = (int)(sizeof(int_cmds) / sizeof(char *)) - 1;
-
-	while (--i >= 0) {
-		if (*cmd == *int_cmds[i] && strcmp(cmd, int_cmds[i]) == 0)
-			return 1;
-	}
-
 	return 0;
 }
 
@@ -1179,7 +1215,7 @@ parse_input_str(char *str)
 	else if (check_shell_functions(str))
 		send_shell = 1;
 
-	if (!send_shell) {
+	if (send_shell == 0) {
 		for (i = 0; str[i]; i++) {
 
 				/* ##################################
@@ -1330,14 +1366,14 @@ parse_input_str(char *str)
 	/* Handle background/foreground process */
 	bg_proc = 0;
 
-	if (*substr[args_n] == '&' && !*(substr[args_n] + 1)) {
+	if (args_n > 0 && *substr[args_n] == '&' && !*(substr[args_n] + 1)) {
 		bg_proc = 1;
 		free(substr[args_n]);
 		substr[args_n] = (char *)NULL;
 		args_n--;
 	} else {
 		size_t len = strlen(substr[args_n]);
-		if (substr[args_n][len - 1] == '&' && !substr[args_n][len]) {
+		if (len > 0 && substr[args_n][len - 1] == '&' && !substr[args_n][len]) {
 			substr[args_n][len - 1] = '\0';
 			bg_proc = 1;
 		}
@@ -1389,7 +1425,7 @@ parse_input_str(char *str)
 		size_t slen = strlen(substr[i]);
 		if (slen > FILE_URI_PREFIX_LEN && IS_FILE_URI(substr[i])) {
 			char tmp[PATH_MAX];
-			strncpy(tmp, substr[i], PATH_MAX - 1);
+			xstrsncpy(tmp, substr[i], sizeof(tmp) - 1);
 			strcpy(substr[i], tmp + FILE_URI_PREFIX_LEN);
 		}
 
@@ -1399,8 +1435,7 @@ parse_input_str(char *str)
 			char *tmp = (char *)NULL;
 			tmp = realpath(substr[i], NULL);
 			if (tmp) {
-				substr[i] = (char *)xrealloc(substr[i], (strlen(tmp) + 1)
-							* sizeof(char));
+				substr[i] = (char *)xrealloc(substr[i], (strlen(tmp) + 1) * sizeof(char));
 				strcpy(substr[i], tmp);
 				free(tmp);
 			}
@@ -1592,8 +1627,8 @@ parse_input_str(char *str)
 					free(esc_str);
 					esc_str = (char *)NULL;
 				} else {
-					fprintf(stderr, _("%s: %s: Error quoting file name\n"),
-					    PROGRAM_NAME, sel_elements[j].name);
+					_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error quoting file name\n"),
+					    PROGRAM_NAME, sel_elements[j].name); 
 					/* Free elements selected thus far and all the
 					 * input substrings */
 					register size_t k = 0;
@@ -1632,7 +1667,7 @@ parse_input_str(char *str)
 
 		else {
 			/* 'sel' is an argument, but there are no selected files. */
-			fprintf(stderr, _("%c%s: There are no selected files%c"),
+			fprintf(stderr, _("%c%s: No selected files%c"),
 			    kb_shortcut ? '\n' : '\0', PROGRAM_NAME,
 			    kb_shortcut ? '\0' : '\n');
 
@@ -1662,7 +1697,7 @@ parse_input_str(char *str)
 			int j = num - 1;
 			char *esc_str = escape_str(file_info[j].name);
 			if (!esc_str) {
-				fprintf(stderr, _("%s: %s: Error quoting file name\n"),
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error quoting file name\n"),
 					PROGRAM_NAME, file_info[num - 1].name);
 				/* Free whatever was allocated thus far */
 				for (j = 0; j <= (int)args_n; j++)
@@ -1673,8 +1708,8 @@ parse_input_str(char *str)
 			/* Replace the ELN by the corresponding escaped file name */
 			if (i == 0)
 				flags |= FIRST_WORD_IS_ELN;
-			if (file_info[j].dir &&
-			file_info[j].name[file_info[j].len
+			if (file_info[j].type == DT_DIR &&
+			file_info[j].name[file_info[j].len > 0
 			? file_info[j].len - 1 : 0] != '/') {
 				substr[i] = (char *)xrealloc(substr[i],
 				    (strlen(esc_str) + 2) * sizeof(char));
@@ -1707,8 +1742,8 @@ parse_input_str(char *str)
 						}
 					}
 				} else {
-					fprintf(stderr, _("%s: %s: Error getting variable name\n"),
-							PROGRAM_NAME, substr[i]);
+					_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error getting variable name\n"),
+						PROGRAM_NAME, substr[i]);
 					size_t j;
 					for (j = 0; j <= args_n; j++)
 						free(substr[j]);
@@ -1729,15 +1764,26 @@ parse_input_str(char *str)
 				strcpy(substr[i], p);
 			}
 		}
-	
+
 		/* We are in STDIN_TMP_DIR: Expand symlinks to target */
-		if (stdin_dir_ok) {
-			char *real_path = realpath(substr[i], NULL);
+		if (stdin_dir_ok == 1) {
+			struct stat a;
+			int ret = lstat(substr[i], &a);
+			int link_ok = (ret != -1 && S_ISLNK(a.st_mode)) ? 1 : 0;
+			char *real_path = link_ok == 1 ? realpath(substr[i], NULL) : (char *)NULL;
 			if (real_path) {
 				substr[i] = (char *)xrealloc(substr[i],
 				    (strlen(real_path) + 1) * sizeof(char));
 				strcpy(substr[i], real_path);
 				free(real_path);
+			} else if (link_ok == 1) {
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, _("realpath: %s: %s\n"),
+					substr[i], strerror(errno));
+				size_t j;
+				for (j = 0; j <= args_n; j++)
+					free(substr[j]);
+				free(substr);
+				return (char **)NULL;
 			}
 		}
 	}
@@ -1764,6 +1810,20 @@ parse_input_str(char *str)
 	}
 #endif /* _NO_TAGS */
 
+				/* ###############################
+				 * #     2.j) ~USERNAME          #
+				 * ###############################*/
+
+	if (*substr[0] == '~' && substr[0][1] != '/') {
+		char *p = tilde_expand(substr[0]);
+		if (p) {
+			size_t l = strlen(p);
+			substr[0] = (char *)xrealloc(substr[0], (l + 1) * sizeof(char));
+			strcpy(substr[0], p);
+			free(p);
+		}
+	}
+
 	/* #### 3) NULL TERMINATE THE INPUT STRING ARRAY #### */
 	substr = (char **)xrealloc(substr, sizeof(char *) * (args_n + 2));
 	substr[args_n + 1] = (char *)NULL;
@@ -1787,10 +1847,10 @@ parse_input_str(char *str)
 
 	int *glob_array = (int *)xnmalloc(int_array_max, sizeof(int));
 	size_t glob_n = 0;
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 	int *word_array = (int *)xnmalloc(int_array_max, sizeof(int));
 	size_t word_n = 0;
-#endif
+#endif /* !__HAIKU__ && !__OpenBSD__ && !__ANDROID__ */
 
 	for (i = 0; substr[i]; i++) {
 
@@ -1819,21 +1879,19 @@ parse_input_str(char *str)
 
 		register size_t j = 0;
 		for (j = 0; substr[i][j]; j++) {
-			/* Brace and wildcard expansion is made by glob()
-			 * as well */
+			/* Brace and wildcard expansion is made by glob() as well */
 			if ((substr[i][j] == '*' || substr[i][j] == '?'
 			|| substr[i][j] == '[' || substr[i][j] == '{')
 			&& substr[i][j + 1] != ' ') {
-				/* Strings containing these characters are taken as
-			 * wildacard patterns and are expanded by the glob
-			 * function. See man (7) glob */
+				/* Strings containing these characters are taken as wildacard
+				 * patterns and are expanded by the glob function. See man (7) glob */
 				if (glob_n < int_array_max) {
 					glob_array[glob_n] = (int)i;
 					glob_n++;
 				}
 			}
 
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 			/* Command substitution is made by wordexp() */
 			if (substr[i][j] == '$' && (substr[i][j + 1] == '('
 			|| substr[i][j + 1] == '{')) {
@@ -1849,7 +1907,7 @@ parse_input_str(char *str)
 					word_n++;
 				}
 			}
-#endif /* __HAIKU__ */
+#endif /* __HAIKU__ && !OpenBSD && !__ANDROID__ */
 		}
 	}
 
@@ -1898,8 +1956,7 @@ parse_input_str(char *str)
 			if (globbuf.gl_pathc) {
 				register size_t j = 0;
 				char **glob_cmd = (char **)NULL;
-				glob_cmd = (char **)xcalloc(args_n + globbuf.gl_pathc + 1,
-											sizeof(char *));
+				glob_cmd = (char **)xcalloc(args_n + globbuf.gl_pathc + 1, sizeof(char *));
 
 				for (i = 0; i < ((size_t)glob_array[g] + old_pathc); i++) {
 					glob_cmd[j] = savestring(substr[i], strlen(substr[i]));
@@ -1917,7 +1974,7 @@ parse_input_str(char *str)
 						j++;
 						free(esc_str);
 					} else {
-						fprintf(stderr, _("%s: %s: Error quoting "
+						_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error quoting "
 							"file name\n"), PROGRAM_NAME, globbuf.gl_pathv[i]);
 						register size_t k = 0;
 						for (k = 0; k < j; k++)
@@ -1960,7 +2017,7 @@ parse_input_str(char *str)
 		/* #############################################
 		 * #    4) COMMAND & PARAMETER SUBSTITUTION    #
 		 * ############################################# */
-#if !defined(__HAIKU__) && !defined(__OpenBSD__)
+#if !defined(__HAIKU__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
 	if (word_n) {
 		size_t old_pathc = 0;
 		register size_t w = 0;
@@ -1991,7 +2048,7 @@ parse_input_str(char *str)
 						j++;
 						free(esc_str);
 					} else {
-						fprintf(stderr, _("%s: %s: Error quoting "
+						_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error quoting "
 							"file name\n"), PROGRAM_NAME, wordbuf.we_wordv[i]);
 
 						register size_t k = 0;
@@ -2030,7 +2087,7 @@ parse_input_str(char *str)
 	}
 
 	free(word_array);
-#endif /* __HAIKU__ */
+#endif /* !__HAIKU__ && !__OpenBSD && !__ANDROID__ */
 
 	if (substr[0] && (*substr[0] == 'd' || *substr[0] == 'u')
 	&& (strcmp(substr[0], "desel") == 0 || strcmp(substr[0], "undel") == 0
@@ -2155,13 +2212,14 @@ char *
 home_tilde(char *new_path, int *_free)
 {
 	*_free = 0;
-	if (!home_ok || !new_path || !*new_path || !user.home)
+	if (home_ok == 0 || !new_path || !*new_path || !user.home)
 		return (char *)NULL;
 
 	char *path_tilde = (char *)NULL;
 
 	/* If path == HOME */
-	if (new_path[1] == user.home[1] && strcmp(new_path, user.home) == 0) {
+	if (new_path[1] && user.home[1] && new_path[1] == user.home[1]
+	&& strcmp(new_path, user.home) == 0) {
 		path_tilde = (char *)xnmalloc(2, sizeof(char));
 		path_tilde[0] = '~';
 		path_tilde[1] = '\0';
@@ -2169,18 +2227,17 @@ home_tilde(char *new_path, int *_free)
 		return path_tilde;
 	}
 
-	if (new_path[1] == user.home[1]
-	&& strncmp(new_path, user.home, user.home_len) == 0) {
+	if (new_path[1] && user.home[1] && new_path[1] == user.home[1]
+	&& strncmp(new_path, user.home, user.home_len) == 0
+	/* Avoid names like these: "HOMEfile". It should always be rather "HOME/file" */
+	&& (user.home[user.home_len - 1] == '/' || *(new_path + user.home_len) == '/') ) {
 		/* If path == HOME/file */
-		path_tilde = (char *)xnmalloc(strlen(new_path + user.home_len + 1) + 3,
-					sizeof(char));
+		path_tilde = (char *)xnmalloc(strlen(new_path + user.home_len + 1) + 3, sizeof(char));
 		sprintf(path_tilde, "~/%s", new_path + user.home_len + 1);
 		*_free = 1;
 		return path_tilde;
 	}
 
-//	path_tilde = (char *)xnmalloc(strlen(new_path) + 1, sizeof(char));
-//	strcpy(path_tilde, new_path);
 	return new_path;
 }
 

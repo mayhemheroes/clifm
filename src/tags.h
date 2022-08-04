@@ -25,7 +25,7 @@
 #ifndef TAGS_H
 #define TAGS_H
 
-int tags_function(char **args);
 int is_tag(char *name);
+int tags_function(char **args);
 
 #endif /* TAGS_H */

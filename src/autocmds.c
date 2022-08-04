@@ -38,8 +38,7 @@
 #include "strings.h"
 #include "sanitize.h"
 
-/* The opts struct contains option values previous to any autocommand
- * call */
+/* The opts struct contains option values previous to any autocommand call */
 void
 reset_opts(void)
 {
@@ -50,6 +49,7 @@ reset_opts(void)
 	opts.long_view = long_view;
 	opts.show_hidden = show_hidden;
 	opts.max_name_len = max_name_len;
+	opts.only_dirs = only_dirs;
 	opts.pager = pager;
 	opts.sort = sort;
 	opts.sort_reverse = sort_reverse;
@@ -59,6 +59,9 @@ reset_opts(void)
 int
 check_autocmds(void)
 {
+	if (!autocmds || autocmds_n == 0)
+		return EXIT_SUCCESS;
+
 	int i = (int)autocmds_n, found = 0;
 	while (--i >= 0) {
 		if (!autocmds[i].pattern)
@@ -101,16 +104,15 @@ check_autocmds(void)
 
 		/* Glob expression or plain text for PATTERN */
 		glob_t g;
-		int ret = glob(p, GLOB_NOSORT | GLOB_NOCHECK
-				| GLOB_TILDE | GLOB_BRACE, NULL, &g);
+		int ret = glob(p, GLOB_NOSORT | GLOB_NOCHECK | GLOB_TILDE | GLOB_BRACE, NULL, &g);
 
 		if (ret != EXIT_SUCCESS) {
 			globfree(&g);
 			continue;
 		}
 
-		size_t j = 0;
-		for (; j < g.gl_pathc; j++) {
+		size_t j;
+		for (j = 0; j < g.gl_pathc; j++) {
 			if (*workspaces[cur_ws].path == *g.gl_pathv[j]
 			&& strcmp(workspaces[cur_ws].path, g.gl_pathv[j]) == 0) {
 				found = 1;
@@ -119,17 +121,16 @@ check_autocmds(void)
 		}
 		globfree(&g);
 
-		if (!rev) {
-			if (!found)
+		if (rev == 0) {
+			if (found == 0)
 				continue;
-		} else if (found) {
+		} else if (found == 1) {
 			continue;
 		}
 
 RUN_AUTOCMD:
-		if (!autocmd_set) {
-			/* Backup current options, only if there was no autocmd for
-			 * this directory */
+		if (autocmd_set == 0) {
+			/* Backup current options, only if there was no autocmd for this directory */
 			opts.light_mode = light_mode;
 			opts.files_counter = files_counter;
 			opts.long_view = long_view;
@@ -139,6 +140,7 @@ RUN_AUTOCMD:
 			opts.sort_reverse = sort_reverse;
 			opts.max_name_len = max_name_len;
 			opts.pager = pager;
+			opts.only_dirs = only_dirs;
 			if (autocmds[i].color_scheme && cur_cscheme)
 				opts.color_scheme = cur_cscheme;
 			else
@@ -155,6 +157,8 @@ RUN_AUTOCMD:
 			long_view = autocmds[i].long_view;
 		if (autocmds[i].show_hidden != -1)
 			show_hidden = autocmds[i].show_hidden;
+		if (autocmds[i].only_dirs != -1)
+			only_dirs = autocmds[i].only_dirs;
 		if (autocmds[i].pager != -1)
 			pager = autocmds[i].pager;
 		if (autocmds[i].sort != -1)
@@ -191,29 +195,12 @@ revert_autocmd_opts(void)
 	max_name_len = opts.max_name_len;
 	pager = opts.pager;
 	sort = opts.sort;
+	only_dirs = opts.only_dirs;
 	sort_reverse = opts.sort_reverse;
 	if (opts.color_scheme && opts.color_scheme != cur_cscheme)
 		set_colors(opts.color_scheme, 0);
 	autocmd_set = 0;
 }
-
-#ifdef AUTOCMDS_TEST
-void
-free_autocmds(void)
-{
-	int i = (int)autocmds_n;
-	while (--i >= 0) {
-		free(autocmds[i].pattern);
-		free(autocmds[i].cmd);
-	}
-	free(autocmds);
-	autocmds = (struct autocmds_t *)NULL;
-	autocmds_n = 0;
-	autocmd_set = 0;
-
-	opts.color_scheme = (char *)NULL;
-}
-#endif /* AUTOCMDS_TEST */
 
 /* Store each autocommand option in the corresponding field of the
  * autocmds struct */
@@ -260,6 +247,8 @@ set_autocmd_opt(char *opt)
 			autocmds[autocmds_n].max_files = a;
 		else if (*opt == 'm' && opt[1] == 'n')
 			autocmds[autocmds_n].max_name_len = a;
+		else if (*opt == 'o' && opt[1] == 'd')
+			autocmds[autocmds_n].only_dirs = a;
 		else if (*opt == 'p' && opt[1] == 'g')
 			autocmds[autocmds_n].pager = a;
 		else if (*opt == 's' && opt[1] == 't')
@@ -281,10 +270,12 @@ init_autocmd_opts()
 	autocmds[autocmds_n].long_view = opts.long_view;
 	autocmds[autocmds_n].max_files = max_files;
 	autocmds[autocmds_n].max_name_len = max_name_len;
+	autocmds[autocmds_n].only_dirs = only_dirs;
 	autocmds[autocmds_n].pager = opts.pager;
 	autocmds[autocmds_n].show_hidden = opts.show_hidden;
 	autocmds[autocmds_n].sort = sort;
 	autocmds[autocmds_n].sort_reverse = sort_reverse;
+
 }
 
 /* Take an autocmd line (from the config file) and store parameters
@@ -306,7 +297,7 @@ parse_autocmd_line(char *cmd)
 	*p = '\0';
 
 	autocmds = (struct autocmds_t *)xrealloc(autocmds,
-				(autocmds_n + 1) * sizeof(struct autocmds_t));
+			(autocmds_n + 1) * sizeof(struct autocmds_t));
 	autocmds[autocmds_n].pattern = savestring(cmd, strlen(cmd));
 
 	init_autocmd_opts();

@@ -51,6 +51,45 @@
 static const char *UNSUPPORTED_TERM[] = {"dumb", /*"cons25",*/ "emacs", NULL};
 
 int
+check_glob_char(const char *str, const int gflag)
+{
+	if (!str || !*str)
+		return 0;
+	return strpbrk(str, (gflag == GLOB_ONLY) ? GLOB_CHARS : GLOB_REGEX_CHARS) ? 1 : 0;
+}
+
+int
+is_file_in_cwd(char *name)
+{
+	if (!name || !*name || !workspaces[cur_ws].path)
+		return 0;
+
+	char *s = strchr(name, '/');
+	if (!s || !*(s + 1)) /* 'name' or 'name/' */
+		return 1;
+
+	char rpath[PATH_MAX];
+	*rpath = '\0';
+	char *ret = realpath(name, rpath);
+	if (!ret || !*rpath)
+		return 0;
+
+	char *cwd = workspaces[cur_ws].path;
+	size_t cwd_len = strlen(cwd);
+	size_t rpath_len = strlen(rpath);
+	if (rpath_len < cwd_len)
+		return 0;
+
+	if (strncmp(rpath, cwd, cwd_len) != 0)
+		return 0;
+
+	if (strchr(rpath + cwd_len + 1, '/'))
+		return 0;
+
+	return 1;
+}
+
+int
 is_url(char *url)
 {
 	if ((*url == 'w' && url[1] == 'w' && url[2] == 'w' && url[3] == '.'
@@ -96,7 +135,8 @@ check_term(void)
 {
 	char *_term = getenv("TERM");
 	if (!_term || !*_term) {
-		fprintf(stderr, _("%s: Error opening terminal: unknown\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Error opening terminal: unknown\n"),
+			PROGRAM_NAME);
 		exit(EXIT_FAILURE);
 	}
 
@@ -104,9 +144,9 @@ check_term(void)
 	for (i = 0; UNSUPPORTED_TERM[i]; i++) {
 		if (*_term == *UNSUPPORTED_TERM[i]
 		&& strcmp(_term, UNSUPPORTED_TERM[i]) == 0) {
-			fprintf(stderr, _("%s: '%s': Unsupported terminal. This "
-					"terminal cannot understand escape sequences\n"),
-					PROGRAM_NAME, UNSUPPORTED_TERM[i]);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Unsupported terminal. This "
+				"terminal cannot understand escape sequences\n"),
+				PROGRAM_NAME, UNSUPPORTED_TERM[i]);
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -134,36 +174,85 @@ set_mount_cmd(const int udisks2ok, const int udevilok)
 		xargs.mount_cmd = UNSET;
 }
 
+#ifndef _NO_FZF
+/* fzf, fzy, and smenu are used as alternative TAB completion mechanisms
+ * fzy and smenu fallback to default if not found
+ * the default value is fzf, if found, or standard (readline) */
+void
+check_completion_mode(void)
+{
+	if (fzftab == 1) { // fzftab is zero only if running with --stdtab
+		if (!(finder_flags & FZF_BIN_OK) && tabmode == FZF_TAB) {
+			_err('w', PRINT_PROMPT, _("%s: fzf: Command not found. Falling back to "
+				"standard TAB completion\n"), PROGRAM_NAME);
+			tabmode = STD_TAB;
+			fzftab = 0;
+		}
+
+		if (!(finder_flags & FZY_BIN_OK) && tabmode == FZY_TAB) {
+			_err('w', PRINT_PROMPT, _("%s: fzy: Command not found. Falling back to the "
+				"default value (fzf, if found, or standard)\n"), PROGRAM_NAME);
+			tabmode = (finder_flags & FZF_BIN_OK) ? FZF_TAB : STD_TAB;
+		} else if (!(finder_flags & SMENU_BIN_OK) && tabmode == SMENU_TAB) {
+			_err('w', PRINT_PROMPT, _("%s: smenu: Command not found. Falling back to the "
+				"default value (fzf, if found, or standard)\n"), PROGRAM_NAME);
+			tabmode = (finder_flags & FZF_BIN_OK) ? FZF_TAB : STD_TAB;
+		}
+
+		if (tabmode == STD_TAB) {
+			if (finder_flags & FZF_BIN_OK) /* We have the fzf binary, let's run in FZF mode */
+				tabmode = FZF_TAB;
+			else /* Either specified mode was not found or no mode was specified */
+				fzftab = 0;
+		}
+	} else {
+/*		_err('w', PRINT_PROMPT, _("%s: fzf: Command not found. Falling back to "
+			"standard TAB completion.\nTo remove this warning set "
+			"TabCompletionMode to the appropriate value in the configuration "
+			"file (F10 or 'edit')\n"), PROGRAM_NAME); */
+		tabmode = STD_TAB;
+		fzftab = 0;
+	}
+}
+#endif /* !_NO_FZF */
+
+/* Let's check for third-party programs */
 void
 check_third_party_cmds(void)
 {
-	int udisks2ok = 0, udevilok = 0, fzfok = 0;
+	int udisks2ok = 0, udevilok = 0;
 	int i = (int)path_progsn;
 
 	while (--i >= 0) {
-		if (*bin_commands[i] != 'u' && *bin_commands[i] != 'f')
+		if (*bin_commands[i] != 'u' && *bin_commands[i] != 'f' && *bin_commands[i] != 's')
 			continue;
 
-		if (strcmp(bin_commands[i], "fzf") == 0) {
-			fzfok = 1;
-			flags |= FZF_BIN_OK;
+		if (*bin_commands[i] == 'f' && strcmp(bin_commands[i], "fzf") == 0) {
+			finder_flags |= FZF_BIN_OK;
 			if (fzftab == UNSET)
 				fzftab = 1;
-		} else if (strcmp(bin_commands[i], "udisksctl") == 0) {
-			udisks2ok = 1;
-		} else {
-			if (strcmp(bin_commands[i], "udevil") == 0)
-				udevilok = 1;
 		}
 
-		if (udevilok && udisks2ok && fzfok)
-			break;
-	}
+		if (*bin_commands[i] == 'f' && strcmp(bin_commands[i], "fzy") == 0) {
+			finder_flags |= FZY_BIN_OK;
+			if (fzftab == UNSET)
+				fzftab = 1;
+		}
 
-	if (fzftab && !fzfok) {
-		_err('w', PRINT_PROMPT, _("%s: fzf not found. Falling back to "
-			"standard TAB completion\n"), PROGRAM_NAME);
-		fzftab = 0;
+		if (*bin_commands[i] == 's' && strcmp(bin_commands[i], "smenu") == 0) {
+			finder_flags |= SMENU_BIN_OK;
+			if (fzftab == UNSET)
+				fzftab = 1;
+		}
+
+		if (*bin_commands[i] == 'u' && strcmp(bin_commands[i], "udisksctl") == 0)
+			udisks2ok = 1;
+		if (*bin_commands[i] == 'u' && strcmp(bin_commands[i], "udevil") == 0)
+			udevilok = 1;
+
+		if (udevilok == 1 && udisks2ok == 1
+		&& (finder_flags & (FZF_BIN_OK | FZY_BIN_OK | SMENU_BIN_OK)))
+			break;
 	}
 
 	set_mount_cmd(udisks2ok, udevilok);
@@ -212,8 +301,8 @@ get_sudo_path(void)
 	int ret = errno;
 
 	if (!sudo) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, p ? p : DEF_SUDO_CMD,
-				strerror(ENOENT));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+			p ? p : DEF_SUDO_CMD, strerror(ENOENT));
 		errno = ret;
 		return (char *)NULL;
 	}
@@ -234,7 +323,7 @@ check_immutable_bit(char *file)
 
 	fd = open(file, O_RDONLY);
 	if (fd == -1) {
-		fprintf(stderr, "'%s': %s\n", file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
 		return -1;
 	}
 
@@ -310,7 +399,7 @@ is_number(const char *restrict str)
 static inline int
 contains_digit(char *str)
 {
-	if (!str || !*(++str))
+	if (!str || !*str || !*(++str))
 		return (-1);
 
 	int i = 1;
@@ -327,9 +416,9 @@ contains_digit(char *str)
 
 /* Returns 1 if CMD is found in CMDS_LIST and zero otherwise */
 static inline int
-find_cmd(char **cmds_list, int list_size, char *cmd)
+find_cmd(const struct cmdslist_t *cmds_list, const size_t list_size, char *cmd)
 {
-	int found = 0, i = list_size;
+	int found = 0, i = (int)list_size;
 	int c = -1, d = contains_digit(cmd);
 
 	if (d != -1) {
@@ -337,8 +426,10 @@ find_cmd(char **cmds_list, int list_size, char *cmd)
 		cmd[d] = '\0';
 	}
 
+	size_t cmd_len = strlen(cmd);
 	while (--i >= 0) {
-		if (*cmd == *cmds_list[i] && strcmp(cmd, cmds_list[i]) == 0) {
+		if (*cmd == *cmds_list[i].name && cmd_len == cmds_list[i].len
+		&& strcmp(cmd, cmds_list[i].name) == 0) {
 			found = 1;
 			break;
 		}
@@ -352,14 +443,10 @@ find_cmd(char **cmds_list, int list_size, char *cmd)
 	return 0;
 }
 
-/* Check CMD against a list of internal commands */
 int
 is_internal_c(char *restrict cmd)
 {
-	int i;
-	for (i = 0; internal_cmds[i]; i++);
-
-	if (find_cmd(internal_cmds, i, cmd))
+	if (find_cmd(internal_cmds, internal_cmds_n, cmd))
 		return 1;
 
 	/* Check for the search and history functions as well */
@@ -373,45 +460,157 @@ is_internal_c(char *restrict cmd)
 
 /* Check cmd against a list of internal commands. Used by parse_input_str()
  * to know if it should perform additional expansions, like glob, regex,
- * tilde, and so on. Only internal commands dealing with file names
+ * tilde, and so on. Only internal commands dealing with ELN/filenames
  * should be checked here */
 int
 is_internal(char *restrict cmd)
 {
-	char *int_cmds[] = {
-		"ac", "ad",
-		"bb", "bleach",
-		"bm", "bookmarks",
-		"bl",
-		"br", "bulk",
-		"c", "cp",
-		"cd",
-		"d", "dup",
-		"exp", "export",
-		"jc", "jp",
-		"l", "le",
-		"m", "mv",
-		"mm", "mime",
-		"n", "new",
-		"o", "open",
-		"paste",
-		"p", "pr", "prop",
-		"pin",
-		"r",
-		"s", "sel",
-		"t", "tr", "trash",
-		"tag", "ta",
-		"te",
-		"v", "vv",
-		NULL};
+	const struct cmdslist_t int_cmds[] = {
+		{"ac", 2},
+		{"ad", 2},
+		{"bb", 2},
+		{"bleach", 6},
+		{"bm", 2},
+		{"bookmarks", 9},
+		{"bl", 2},
+		{"br", 2},
+		{"bulk", 4},
+		{"c", 1},
+		{"cp", 2},
+		{"cd", 2},
+		{"d", 1},
+		{"dup", 3},
+		{"exp", 3},
+		{"export", 6},
+		{"jc", 2},
+		{"jp", 2},
+		{"l", 1},
+		{"le", 2},
+		{"m", 1},
+		{"mv", 2},
+		{"mm", 2},
+		{"mime", 4},
+		{"n", 1},
+		{"new", 3},
+		{"o", 1},
+		{"open", 4},
+		{"paste", 5},
+		{"p", 1},
+		{"pp", 2},
+		{"pr", 2},
+		{"prop", 4},
+		{"pin", 3},
+		{"r", 1},
+		{"s", 1},
+		{"sel", 3},
+		{"t", 1},
+		{"tr", 2},
+		{"trash", 5},
+		{"tag", 3},
+		{"ta", 2},
+		{"te", 2},
+		{"v", 1},
+		{"vv", 2},
+		{NULL, 0}
+	};
 
-	int i = (int)(sizeof(int_cmds) / sizeof(char *)) - 1;
+	static size_t i = 0;
+	if (i == 0)
+		i = (sizeof(int_cmds) / sizeof(struct cmdslist_t)) - 1;
+
 	if (find_cmd(int_cmds, i, cmd))
 		return 1;
 
 	/* Check for the search function as well */
 	if (*cmd == '/' && access(cmd, F_OK) != 0)
 		return 1;
+
+	return 0;
+}
+
+/* Check CMD against a list of internal commands taking ELN's or numbers
+ * as parameters. Used by split_fusedcmd() */
+int
+is_internal_f(const char *restrict cmd)
+{
+	/* If we are completing/suggesting, do not take 'ws', 'mf', and 'st' commands
+	 * into account: they do not take ELN/filenames as parameters, but just
+	 * numbers, in which case no ELN-filename completion should be made */
+	if (flags & STATE_COMPLETING
+	&& (*cmd == 'w' || (*cmd == 'm' && *(cmd + 1) == 'f')
+	|| (*cmd == 's' && (*(cmd + 1) == 't' || *(cmd + 1) == 'o')) ) )
+		return 0;
+
+	const struct cmdslist_t int_cmds[] = {
+		{"ac", 2},
+		{"ad", 2},
+		{"bb", 2},
+		{"bl", 2},
+		{"bleach", 6},
+		{"bm", 2},
+		{"bookmarks", 9},
+		{"br", 2},
+		{"bulk", 4},
+		{"c", 1},
+		{"cp", 2},
+		{"cd", 2},
+		{"d", 1},
+		{"dup", 3},
+		{"ds", 2},
+		{"desel", 5},
+		{"exp", 3},
+		{"l", 1},
+		{"ln", 2},
+		{"le", 2},
+		{"m", 1},
+// TESTING MIME!
+		{"mm", 2},
+// TESTING MIME!
+		{"mv", 2},
+		{"md", 2},
+		{"mkdir", 5},
+		{"mf", 2},
+		{"n", 1},
+		{"new", 3},
+		{"o", 1},
+		{"open", 4},
+		{"ow", 2},
+		{"p", 1},
+		{"pp", 2},
+		{"pr", 2},
+		{"prop", 4},
+		{"paste", 5},
+		{"pin", 3},
+		{"r", 1},
+		{"rm", 2},
+		{"rr", 2},
+		{"s", 1},
+		{"sel", 3},
+		{"st", 2},
+		{"sort", 4},
+		{"t", 1},
+		{"tr", 2},
+		{"trash", 5},
+		{"tag", 3},
+		{"ta", 2},
+		{"te", 2},
+		{"unlink", 6},
+		{"ws", 2},
+		{NULL, 0}
+	};
+
+	static int n = 0;
+	if (n == 0)
+		n = (int)(sizeof(int_cmds) / sizeof(struct cmdslist_t)) - 1;
+	size_t cmd_len = strlen(cmd);
+
+	int i = n;
+	while (--i >= 0) {
+		if (*cmd == *int_cmds[i].name && cmd_len == int_cmds[i].len
+		&& strcmp(cmd, int_cmds[i].name) == 0) {
+			return 1;
+		}
+	}
 
 	return 0;
 }
@@ -512,7 +711,8 @@ check_for_alias(char **args)
 		char **alias_comm = parse_input_str(aliases[i].cmd);
 		if (!alias_comm) {
 			args_n = 0;
-			fprintf(stderr, _("%s: Error parsing aliased command\n"), PROGRAM_NAME);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Error parsing aliased command\n"),
+				PROGRAM_NAME);
 			return (char **)NULL;
 		}
 
@@ -554,8 +754,7 @@ check_file_size(char *file, int max)
 	if (stat(file, &attr) == -1) {
 		fp = open_fstream_w(file, &fd);
 		if (!fp) {
-			_err(0, NOPRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-			    file, strerror(errno));
+			_err(0, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
 		} else {
 			close_fstream(fp, fd);
 		}
@@ -593,7 +792,7 @@ check_file_size(char *file, int max)
 
 	int fdd = mkstemp(tmp);
 	if (fdd == -1) {
-		fprintf(stderr, "log: %s: %s", tmp, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "log: %s: %s", tmp, strerror(errno));
 		close_fstream(fp, fd);
 		free(tmp);
 		return;

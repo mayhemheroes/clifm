@@ -77,8 +77,10 @@ struct stats_t stats;
 struct autocmds_t *autocmds = (struct autocmds_t *)NULL;
 struct opts_t opts;
 struct sel_t *sel_elements = (struct sel_t *)NULL;
-struct prompts_t *prompts;
+struct prompts_t *prompts = (struct prompts_t *)NULL;
+struct history_t *history = (struct history_t *)NULL;
 struct msgs_t msgs;
+struct props_t prop_fields;
 
 struct sort_t __sorts[] = {
     {"none", 0, 0},
@@ -99,12 +101,16 @@ struct sort_t __sorts[] = {
 /* pmsg holds the current program message type */
 enum prog_msg pmsg = NOMSG;
 enum comp_type cur_comp_type = TCMP_NONE;
-struct param xargs;
+enum tab_mode tabmode = STD_TAB;
+
+struct param_t xargs;
 unsigned short term_cols;
 
 int curcol = 0,
 	currow = 0,
-	flags = 0;
+	flags = 0,
+	finder_flags = 0,
+	search_flags = 0;
 
 struct termios
 	orig_termios,
@@ -120,6 +126,7 @@ regex_t regex_exp;
 size_t *ext_colors_len = (size_t *)NULL;
 
 int
+	apparent_size = UNSET,
 	auto_open = UNSET,
 	autocd = UNSET,
 	autocmd_set = 0,
@@ -144,6 +151,9 @@ int
 	cp_cmd = UNSET,
 	cur_ws = UNSET,
 	dequoted = 0,
+
+	desktop_notifications = UNSET,
+
 	dir_changed = 0,
 	dirhist_map = UNSET,
 	disk_usage = UNSET,
@@ -168,8 +178,9 @@ int
 	kb_shortcut = 0,
 	kbind_busy = 0,
 	light_mode = UNSET,
-	list_folders_first = UNSET,
+	list_dirs_first = UNSET,
 	listing_mode = UNSET,
+	log_cmds = UNSET,
 	logs_enabled = UNSET,
 	long_view = UNSET,
 	max_name_len = DEF_MAX_NAME_LEN,
@@ -182,8 +193,10 @@ int
 	open_in_foreground = 0,
 	pager = UNSET,
 	tips = UNSET,
+	prev_ws = UNSET,
 	print_msg = 0,
 	print_selfiles = UNSET,
+	print_removed_files = UNSET,
 	prompt_offset = UNSET,
 	prompt_notif = UNSET,
 	recur_perm_error_flag = 0,
@@ -191,6 +204,7 @@ int
 	rl_last_word_start = 0,
 	rl_nohist = 0,
 	rl_notab = 0,
+	search_strategy = UNSET,
 	sel_is_last = 0,
 	selfile_ok = 1,
 	share_selbox = UNSET,
@@ -262,7 +276,6 @@ size_t
 	tab_offset = 0,
 	tags_n = 0,
 	trash_n = 0,
-	user_home_len = 0,
 	usrvar_n = 0,
 	zombies = 0;
 
@@ -274,6 +287,8 @@ char
 	finder_in_file[PATH_MAX],
 	finder_out_file[PATH_MAX],
 #endif /* _NO_FZF */
+	_fmatch[PATH_MAX],
+	prop_fields_str[PROP_FIELDS_SIZE] = "",
 
 	*actions_file = (char *)NULL,
 	*alt_bm_file = (char *)NULL,
@@ -301,7 +316,6 @@ char
 	*last_cmd = (char *)NULL,
 	*log_file = (char *)NULL,
 	*mime_file = (char *)NULL,
-	*msg_log_file = (char *)NULL,
 	*opener = (char *)NULL,
 	*pinned_dir = (char *)NULL,
 	*plugins_dir = (char *)NULL,
@@ -311,6 +325,7 @@ char
 	*remotes_file = (char *)NULL,
 /*	*right_prompt = (char *)NULL, */
 	*sel_file = (char *)NULL,
+	*smenutab_options_env = (char *)NULL,
 	*stdin_tmp_dir = (char *)NULL,
 #ifndef _NO_SUGGESTIONS
 	*suggestion_buf = (char *)NULL,
@@ -326,7 +341,6 @@ char
 	*trash_info_dir = (char *)NULL,
 #endif
 	*usr_cscheme = (char *)NULL,
-	*user_home = (char *)NULL,
 	*wprompt_str = (char *)NULL,
 
 	**argv_bk = (char **)NULL,
@@ -335,7 +349,6 @@ char
 	**cdpaths = (char **)NULL,
 	**color_schemes = (char **)NULL,
 	**ext_colors = (char **)NULL,
-	**history = (char **)NULL,
 	**messages = (char **)NULL,
 	**old_pwd = (char **)NULL,
 	**paths = (char **)NULL,
@@ -345,255 +358,337 @@ char
 
 /* A list of internal commands, with short and long formats. We use two
  * more lists of commands: one of commands dealing with file names
- * (is_internal(), in checks.c), and another one listing commands
- * taking ELN's as parameters (is_internal_f() in strings.c) */
-char *internal_cmds[] = {
-	",",
-	"?", "help",
-	"ac", "ad",
-	"acd", "autocd",
-	"actions",
-	"alias",
-	"ao", "auto-open",
-	"b", "back",
-	"bb", "bleach",
-	"bd",
-	"bh", "fh",
-	"bl",
-	"bm", "bookmarks",
-	"br", "bulk",
-	"c", "cp",
-	"cc", "colors",
-	"cd",
-	"cl", "columns",
-	"cmd", "commands",
-	"cs", "colorschemes",
-	"d", "dup",
-	"ds", "desel",
-	"edit",
-	"exp", "export",
-	"ext",
-	"f", "forth",
-	"fc",
-	"ff", "folders-first",
-	"fs",
-	"ft", "filter",
-	"fz",
-	"history",
-	"hf", "hidden",
-	"icons",
-	"jump", "je", "jc", "jp", "jo",
-	"kb", "keybinds",
-	"l", "ln", "le",
-	"lm",
-	"log",
-	"m", "mv",
-	"md", "mkdir",
-	"media",
-	"mf",
-	"mm", "mime",
-	"mp", "mountpoints",
-	"msg", "messages",
-	"n", "new",
-	"net",
-	"o", "open", "ow",
-	"opener",
-	"p", "pp", "pr", "prop",
-	"path", "cwd",
-	"paste",
-	"pf", "prof", "profile",
-	"pg", "pager",
-	"pin", "unpin",
-	"prompt",
-	"quit", "exit",
-	"r", "rm",
-	"rf", "refresh",
-	"rl", "reload",
-	"rr",
-	"s", "sel",
-	"sb", "selbox",
-	"splash",
-	"st", "sort",
-	"stats",
-	"t", "tr", "trash",
-	"tag", "ta", "td", "tl", "tm", "tn", "tu", "ty",
-	"te",
-	"tips",
-	"touch",
-	"u", "undel", "untrash",
-	"uc", "unicode",
-	"unlink",
-	"v", "vv",
-	"ver", "version",
-	"ws",
-	"x", "X",
-	NULL};
+ * (is_internal()), and another one listing commands taking ELN's/numbers
+ * as parameters (is_internal_f()), both in checks.c */
+const struct cmdslist_t internal_cmds[] = {
+	{",", 1},
+	{"?", 1},
+	{"help", 4},
+	{"ac", 2},
+	{"ad", 2},
+	{"acd", 3},
+	{"autocd", 6},
+	{"actions", 7},
+	{"alias", 5},
+	{"ao", 2},
+	{"auto-open", 9},
+	{"b", 1},
+	{"back", 4},
+	{"bb", 2},
+	{"bleach", 6},
+	{"bd", 2},
+	{"bh", 2},
+	{"fh", 2},
+	{"bl", 2},
+	{"bm", 2},
+	{"bookmarks", 9},
+	{"br", 2},
+	{"bulk", 4},
+	{"c", 1}, //"cp",
+//	{"cc", 2}, /* Remove to avoid conflicts with /bin/cc */
+	{"colors", 6},
+	{"cd", 2},
+	{"cl", 2},
+	{"columns", 7},
+	{"cmd", 3},
+	{"commands", 8},
+	{"cs", 2},
+	{"colorschemes", 12},
+	{"d", 1},
+	{"dup", 3},
+	{"ds", 2},
+	{"desel", 5},
+	{"edit", 4},
+	{"exp", 3},
+	{"export", 6},
+	{"ext", 3},
+	{"f", 1},
+	{"forth", 5},
+	{"fc", 2},
+	{"ff", 2},
+	{"dirs-first", 10},
+	{"fs", 2},
+	{"ft", 2},
+	{"filter", 6},
+	{"fz", 2},
+	{"history", 7},
+	{"hf", 2},
+	{"hidden", 6},
+	{"icons", 5},
+	{"jump", 4},
+	{"je", 2},
+	{"jc", 2},
+	{"jp", 2},
+	{"jo", 2},
+	{"kb", 2},
+	{"keybinds", 8},
+	{"l", 1},
+	{"le", 2}, //"ln",
+	{"lm", 2},
+	{"log", 3},
+	{"m", 1}, //"mv",
+	{"md", 2},
+//	{"mkdir", },
+	{"media", 5},
+	{"mf", 2},
+	{"mm", 2},
+	{"mime", 4},
+	{"mp", 2},
+	{"mountpoints", 11},
+	{"msg", 3},
+	{"messages", 8},
+	{"n", 1},
+	{"new", 3},
+	{"net", 3},
+	{"o", 1},
+	{"open", 4},
+	{"ow", 2},
+	{"opener", 6},
+	{"p", 1},
+	{"pp", 2},
+	{"pr", 2},
+	{"prop", 4},
+	{"path", 4},
+	{"cwd", 3},
+	{"paste", 5},
+	{"pf", 2},
+	{"prof", 4},
+	{"profile", 7},
+	{"pg", 2},
+	{"pager", 5},
+	{"pin", 3},
+	{"unpin", 5},
+	{"prompt", 6},
+	{"quit", 4},
+	{"exit", 4},
+	{"r", 1}, //"rm",
+	{"rf", 2},
+	{"refresh", 7},
+	{"rl", 2},
+	{"reload", 6},
+	{"rr", 2},
+	{"s", 1},
+	{"sel", 3},
+	{"sb", 2},
+	{"selbox", 6},
+	{"splash", 6},
+	{"st", 2},
+	{"sort", 4},
+	{"stats", 5},
+	{"t", 1},
+	{"tr", 2},
+	{"trash", 5},
+	{"tag", 3},
+	{"ta", 2},
+	{"td", 2},
+	{"tl", 2},
+	{"tm", 2},
+	{"tn", 2},
+	{"tu", 2},
+	{"ty", 2},
+	{"te", 2},
+	{"tips", 4},
+//	"touch",
+	{"u", 1},
+	{"undel", 5},
+	{"untrash", 7},
+	{"uc", 2},
+	{"unicode", 7},
+	{"unlink", 6},
+	{"v", 1},
+	{"vv", 2},
+	{"ver", 3},
+	{"version", 7},
+	{"ws", 2},
+	{"x", 1},
+	{"X", 1},
+	{NULL, 0}
+};
+size_t internal_cmds_n = 0;
 
-/* Just a list of internal commands and fixed parameters for the
- * auto-suggestions system */
-const char *param_str[] = {
-	"actions edit",
-	"autocd on",
-	"acd on",
-	"autocd off",
-	"acd off",
-	"autocd status",
-	"acd status",
-	"alias import",
-	"alias ls",
-	"alias list",
-	"ao on",
-	"auto-open on",
-	"ao off",
-	"auto-open off",
-	"ao status",
-	"auto-open status",
-	"b hist",
-	"b clear",
-	"back hist",
-	"back clear",
-	"bm add",
-	"bm del",
-	"bm edit",
-	"bookmarks add",
-	"bookmarks del",
-	"bookmarks edit",
-	"desel all",
-	"ds all",
-	"cs edit",
-	"colorscheme edit",
-	"edit",
-	"edit reset",
-	"ext on",
-	"ext off",
-	"ext status",
-	"f hist",
-	"f clear",
-	"forth hist",
-	"forth clear",
-	"fc on",
-	"filescounter on",
-	"fc off",
-	"filescounter off",
-	"fc status",
-	"filescounter status",
-	"ff on",
-	"folders-first on",
-	"ff off",
-	"folders-first off",
-	"ff status",
-	"folders-first status",
-	"ft unset",
-	"filter unset",
-	"fz on",
-	"fz off",
-	"hf on",
-	"hf off",
-	"hf status",
-	"hidden on",
-	"hidden off",
-	"hidden status",
-	"history clear",
-	"history edit",
-	"history on",
-	"history off",
-	"history status",
-	"icons on",
-	"icons off",
-	"kb edit",
-	"keybinds edit",
-	"kb reset",
-	"keybinds reset",
-	"kb readline",
-	"keybinds readline",
-	"l edit",
-	"lm on",
-	"lm off",
-	"log clear",
-	"mf unset",
-	"mm info",
-	"mm edit",
-	"mm import",
-	"mime info",
-	"mime edit",
-	"mime import",
-	"msg clear",
-	"messages clear",
-	"net edit",
-	"net mount",
-	"net unmount",
-	"opener default",
-	"pg on",
-	"pager on",
-	"pg off",
-	"pager off",
-	"pg status",
-	"pager status",
-	"pf set",
-	"pf add",
-	"pf del",
-	"pf list",
-	"profile set",
-	"profile add",
-	"profile del",
-	"profile list",
-	"prompt edit",
-	"prompt list",
-	"prompt reload",
-	"prompt unset",
-	"st none",
-	"st name",
-	"st size",
-	"st atime",
-	"st btime",
-	"st ctime",
-	"st owner",
-	"st group",
-	"st ext",
-	"st inode",
-	"st version",
-	"sort none",
-	"sort name",
-	"sort size",
-	"sort atime",
-	"sort btime",
-	"sort ctime",
-	"sort owner",
-	"sort group",
-	"sort ext",
-	"sort inode",
-	"sort version",
-	"st rev",
-	"sort rev",
-	"t list",
-	"t clear",
-	"t empty",
-	"t del",
-	"tr list",
-	"tr clear",
-	"tr empty",
-	"tr del",
-	"trash list",
-	"trash clear",
-	"trash empty",
-	"trash del",
-	"tag del",
-	"tag rm",
-	"tag new",
-	"tag merge",
-	"tag rename",
-	"tag mv",
-	"tag untag",
-	"u all",
-	"undel all",
-	"untrash all",
-	"uc on",
-	"unicode on",
-	"uc off",
-	"unicode off",
-	"uc status",
-	"unicode status",
-	NULL};
+/* A list of internal commands and fixed parameters for the auto-suggestions system */
+const struct cmdslist_t param_str[] = {
+	{"actions edit", 12},
+	{"autocd on", 9},
+	{"acd on", 6},
+	{"autocd off", 10},
+	{"acd off", 7},
+	{"autocd status", 13},
+	{"acd status", 10},
+	{"alias import", 12},
+	{"alias ls", 8},
+	{"alias list", 10},
+	{"ao on", 5},
+	{"auto-open on", 12},
+	{"ao off", 6},
+	{"auto-open off", 13},
+	{"ao status", 9},
+	{"auto-open status", 16},
+	{"b hist", 6},
+	{"b clear", 7},
+	{"back hist", 9},
+	{"back clear", 10},
+	{"bm add", 6},
+	{"bm del", 6},
+	{"bm edit", 7},
+	{"bookmarks add", 13},
+	{"bookmarks del", 13},
+	{"bookmarks edit", 14},
+	{"desel all", 9},
+	{"ds all", 6},
+	{"cs edit", 7},
+	{"colorscheme edit", 16},
+	{"edit", 4},
+	{"edit reset", 10},
+	{"ext on", 6},
+	{"ext off", 7},
+	{"ext status", 10},
+	{"f hist", 6},
+	{"f clear", 7},
+	{"forth hist", 10},
+	{"forth clear", 11},
+	{"fc on", 5},
+	{"filescounter on", 15},
+	{"fc off", 6},
+	{"filescounter off", 16},
+	{"fc status", 9},
+	{"filescounter status", 19},
+	{"ff on", 5},
+	{"dirs-first on", 13},
+	{"ff off", 6},
+	{"dirs-first off", 14},
+	{"ff status", 9},
+	{"dirs-first status", 17},
+	{"ft unset", 8},
+	{"filter unset", 12},
+	{"fz on", 5},
+	{"fz off", 6},
+	{"help archives", 13},
+	{"help autocommands", 17},
+	{"help basics", 11},
+	{"help bookmarks", 14},
+	{"help desktop-notifications", 26},
+	{"help dir-jumper", 15},
+	{"help file-details", 17},
+	{"help file-tags", 14},
+	{"help navigation", 15},
+	{"help plugins", 12},
+	{"help remotes", 12},
+	{"help resource-opener", 20},
+	{"help selection", 14},
+	{"help search", 11},
+	{"help theming", 12},
+	{"help trash", 10},
+	{"hf on", 5},
+	{"hf off", 6},
+	{"hf status", 9},
+	{"hidden on", 9},
+	{"hidden off", 10},
+	{"hidden status", 13},
+	{"history clear", 13},
+	{"history edit", 12},
+	{"history on", 10},
+	{"history off", 11},
+	{"history status", 14},
+	{"icons on", 8},
+	{"icons off", 9},
+	{"kb edit", 7},
+	{"keybinds edit", 13},
+	{"kb reset", 8},
+	{"keybinds reset", 14},
+	{"kb readline", 11},
+	{"keybinds readline", 17},
+	{"l edit", 6},
+	{"lm on", 5},
+	{"lm off", 6},
+	{"log clear", 9},
+	{"mf unset", 8},
+	{"mm info", 7},
+	{"mm edit", 7},
+	{"mm import", 9},
+	{"mime info", 9},
+	{"mime edit", 9},
+	{"mime import", 11},
+	{"msg clear", 9},
+	{"messages clear", 14},
+	{"net edit", 8},
+	{"net mount", 9},
+	{"net unmount", 11},
+	{"opener default", 14},
+	{"pg on", 5},
+	{"pager on", 8},
+	{"pg off", 6},
+	{"pager off", 9},
+	{"pg status", 9},
+	{"pager status", 12},
+	{"pf set", 6},
+	{"pf add", 6},
+	{"pf del", 6},
+	{"pf list", 7},
+	{"profile set", 11},
+	{"profile add", 11},
+	{"profile del", 11},
+	{"profile list", 12},
+	{"prompt edit", 11},
+	{"prompt list", 11},
+	{"prompt reload", 13},
+	{"prompt unset", 12},
+	{"st none", 7},
+	{"st name", 7},
+	{"st size", 7},
+	{"st atime", 8},
+	{"st btime", 8},
+	{"st ctime", 8},
+	{"st mtime", 8},
+	{"st owner", 8},
+	{"st group", 8},
+	{"st extension", 12},
+	{"st inode", 8},
+	{"st version", 10},
+	{"sort none", 9},
+	{"sort name", 9},
+	{"sort size", 9},
+	{"sort atime", 10},
+	{"sort btime", 10},
+	{"sort ctime", 10},
+	{"sort mtime", 10},
+	{"sort owner", 10},
+	{"sort group", 10},
+	{"sort extension", 14},
+	{"sort inode", 10},
+	{"sort version", 12},
+	{"st rev", 6},
+	{"sort rev", 8},
+	{"t list", 6},
+	{"t clear", 7},
+	{"t empty", 7},
+	{"t del", 5},
+	{"tr list", 7},
+	{"tr clear", 8},
+	{"tr empty", 8},
+	{"tr del", 6},
+	{"trash list", 10},
+	{"trash clear", 11},
+	{"trash empty", 11},
+	{"trash del", 9},
+	{"tag del", 7},
+	{"tag rm", 6},
+	{"tag new", 7},
+	{"tag merge", 9},
+	{"tag rename", 10},
+	{"tag mv", 6},
+	{"tag untag", 9},
+	{"u all", 5},
+	{"undel all", 9},
+	{"untrash all", 11},
+	{"uc on", 5},
+	{"unicode on", 10},
+	{"uc off", 6},
+	{"unicode off", 11},
+	{"uc status", 9},
+	{"unicode status", 14},
+	{NULL, 0}
+};
 
 /* Colors */
 char
@@ -786,29 +881,31 @@ static inline void
 set_root_indicator(void)
 {
 	if (flags & ROOT_USR) {
-		_err(0, PRINT_PROMPT, _("%s->%s Running as root%s\n"),
-			colorize ? mi_c : "", colorize ? _RED : "", colorize ? df_c : "");
+		_err(ERR_NO_LOG, PRINT_PROMPT, _("%s->%s Running as root%s\n"),
+			colorize == 1 ? mi_c : "", colorize == 1 ? _RED : "", colorize == 1 ? df_c : "");
 	}
 }
 
 static inline void
 __list()
 {
-	if (autols && isatty(STDIN_FILENO)) {
+	if (autols == 1 && isatty(STDIN_FILENO)) {
 #ifdef LINUX_INOTIFY
 		/* Initialize inotify */
 		inotify_fd = inotify_init1(IN_NONBLOCK);
 		if (inotify_fd < 0) {
-			_err('w', PRINT_PROMPT, "%s: inotify: %s\n", PROGRAM_NAME,
-				strerror(errno));
+			_err('w', PRINT_PROMPT, "%s: inotify: %s\n", PROGRAM_NAME, strerror(errno));
 		}
 #elif defined(BSD_KQUEUE)
 		kq = kqueue();
 		if (kq < 0) {
-			_err('w', PRINT_PROMPT, "%s: kqueue: %s\n", PROGRAM_NAME,
-				strerror(errno));
+			_err('w', PRINT_PROMPT, "%s: kqueue: %s\n", PROGRAM_NAME, strerror(errno));
 		}
 #endif
+
+		if (colorize == 1 && xargs.eln_use_workspace_color == 1)
+			set_eln_color();
+
 		list_dir();
 	}
 }
@@ -827,13 +924,14 @@ _splash(void)
 static inline void
 _set_term_title(void)
 {
-	if (flags & GUI) {
-		if (xargs.cwd_in_title == 0) {
-			printf("\033]2;%s\007", PROGRAM_NAME);
-			fflush(stdout);
-		} else {
-			set_term_title(workspaces[cur_ws].path);
-		}
+	if (!(flags & GUI) || xargs.list_and_quit == 1)
+		return;
+
+	if (xargs.cwd_in_title == 0) {
+		printf("\033]2;%s\007", PROGRAM_NAME);
+		fflush(stdout);
+	} else {
+		set_term_title(workspaces[cur_ws].path);
 	}
 }
 
@@ -842,7 +940,7 @@ check_working_directory(void)
 {
 	if (workspaces == (struct ws_t *)NULL || !workspaces[cur_ws].path
 	|| !*workspaces[cur_ws].path) {
-		_err(0, NOPRINT_PROMPT, _("%s: Fatal error! Failed "
+		_err(0, NOPRINT_PROMPT, _("%s: Fatal error! Failure "
 			"retrieving current working directory\n"), PROGRAM_NAME);
 		exit(EXIT_FAILURE);
 	}
@@ -859,6 +957,7 @@ check_working_shell(void)
 	}
 }
 
+#ifndef _NO_TRASH
 static inline void
 init_trash(void)
 {
@@ -868,6 +967,7 @@ init_trash(void)
 			trash_n = 0;
 	}
 }
+#endif /* _NO_TRASH */
 
 static inline void
 get_hostname(void)
@@ -875,8 +975,7 @@ get_hostname(void)
 	if (gethostname(hostname, sizeof(hostname)) == -1) {
 		hostname[0] = '?';
 		hostname[1] = '\0';
-		_err('e', PRINT_PROMPT, _("%s: Error getting hostname\n"),
-			PROGRAM_NAME);
+		_err('e', PRINT_PROMPT, _("%s: Error getting hostname\n"), PROGRAM_NAME);
 	}
 }
 /*
@@ -900,11 +999,6 @@ init_file_flags(void)
 int
 main(int argc, char *argv[])
 {
-/*
-//	config_ok = 0;
-	home_ok = 0;
-	selfile_ok = 0;
-	trash_ok = 0; */
 	/* Quite unlikely to happen, but one never knows. See
 	 * https://lwn.net/SubscriberLink/882799/cb8f313c57c6d8a6/
 	 * and
@@ -914,11 +1008,10 @@ main(int argc, char *argv[])
 		exit(EINVAL);
 	}
 
+	msgs.error = msgs.notice = msgs.warning = 0;
 /*	init_file_flags(); */
-	/* Make sure we are running on supported CPU and operating system */
-	check_cpu_os();
-	/* Make sure we are running on a supported terminal */
-	check_term();
+	check_cpu_os(); /* Running on supported CPU and operating system? */
+	check_term(); /* Running on a supported terminal */
 
 	/* # 1. INITIALIZE EVERYTHING WE NEED # */
 
@@ -983,6 +1076,7 @@ main(int argc, char *argv[])
 	init_config();
 	check_options();
 	set_sel_file();
+	set_env();
 	create_tmp_files();
 #ifndef _NO_FZF
 	set_finder_paths();
@@ -995,8 +1089,11 @@ main(int argc, char *argv[])
 	if (!(flags & PATH_PROGRAMS_ALREADY_LOADED))
 		get_path_programs();
 
-	/* Check third-party programs availability: FZF, udevil, and udisks2 */
+	/* Check third-party programs availability: finders (fzf, fzy, smenu), udevil, and udisks2 */
 	check_third_party_cmds();
+#ifndef _NO_FZF
+	check_completion_mode();
+#endif /* _NO_FZF */
 
 	/* Initialize gettext() for translations */
 #ifndef _NO_GETTEXT
@@ -1034,6 +1131,8 @@ main(int argc, char *argv[])
 	if (!jump_db || xargs.path == 1)
 		add_to_jumpdb(workspaces[cur_ws].path);
 
+//	int vanilla_readline = 1;
+//	if (vanilla_readline != 1)
 	initialize_readline();
 	/*Trim the directory history file if necessary */
 	check_file_size(dirhist_file, max_dirhist);
@@ -1047,7 +1146,7 @@ main(int argc, char *argv[])
 	get_hostname();
 	init_shell();
 
-	if (config_ok)
+	if (config_ok == 1)
 		init_history();
 
 	/* Store history into an array to be able to manipulate it */
@@ -1056,7 +1155,6 @@ main(int argc, char *argv[])
 	get_profile_names();
 	load_pinned_dir();
 	load_prompts();
-	set_env();
 
 	/* # 2. MAIN PROGRAM LOOP # */
 	run_main_loop();

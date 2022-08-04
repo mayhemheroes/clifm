@@ -1,9 +1,7 @@
 #compdef clifm
 #
-# Completion definition for CliFM
-#
-# Author:
-#   L. Abramovich
+# Completion definition for clifm
+# Author: L. Abramovich
 #
 
 setopt localoptions noshwordsplit noksharrays
@@ -16,8 +14,9 @@ args=(
 	{-c+,--config-file=}'[specify an alternative configuration file]:filename:_files'
 	{-D+,--config-dir=}'[specify an alternative configuration directory]:directory:_directories'
 	{-e,--no-eln}'[do not print ELN (entry list number) at the left of each filename]'
-	{-f,--no-folders-first}'[do not list folders first]'
-	{-F,--folders-first}'[list folders first (default)]'
+	{-E,--eln-use-workspace-color}'[ELN'\''s use the color of the current workspace]'
+	{-f,--no-dirs-first}'[do not list directories first]'
+	{-F,--dirs-first}'[list directories first (default)]'
 	{-g,--pager}'[enable the pager]'
 	{-G,--no-pager}'[disable the pager (default)]'
 	{-h,--help}'[show this help and exit]'
@@ -28,10 +27,11 @@ args=(
 	{-l,--no-long-view}'[disable long view mode (default)]'
 	{-L,--long-view}'[enable long/detailed view mode]'
 	{-m,--dihist-map}'[enable the directory history map]'
-	{-o,--no-autols}'['cd' works as the shell 'cd' command]'
-	{-O,--autols}'['cd' lists files on the fly (default)]'
+	{-o,--no-autols}'['\''cd'\'' works as the shell '\''cd'\'' command]'
+	{-O,--autols}'['\''cd'\'' lists files on the fly (default)]'
 	{-p+,--path=}'[use PATH as CliFM starting path]:directory:_directories'
 	{-P+,--profile=}'[use (or create) PROFILE as profile]:profile:->profiles'
+	{-r,--no-refresh-on-empty-line}'[do not refresh the screen when pressing Enter on empty line]'
 	{-s,--splash}'[print the logo screen at startup]'
 	{-S,--stealth-mode}'[leave no trace on the host system]'
 	{-t,--disk-usage-analyzer}'[run in disk usage analyzer mode]'
@@ -48,10 +48,12 @@ args=(
 	'--cd-on-quit[write last visited path to $XDG_CONFIG_HOME/clifm/.last to be accessed later by a shell funtion]'
 	'--color-scheme=[set color scheme]:color:->colorschemes'
 	'--cwd-in-title[print current directory in the terminal window title]'
+	'--desktop-notifications[enable desktop notifications]'
 	'--disk-usage[show disk usage (free/total) for the filesystem to which the current directory belongs]'
 	'--enable-logs[enable program logs]'
 	'--expand-bookmarks[expand bookmark names into the corresponding bookmark paths]'
 	'--full-dir-size[print size of directories and their contents in long view mode]'
+	'--fuzzy-match[enable fuzzy matches for completions and suggestions (only file names and paths)]'
 	'--icons[enable icons]'
 	'--icons-use-file-color[icons color follows file color]'
 	'--int-vars[enable internal variables]'
@@ -60,7 +62,7 @@ args=(
 	'--max-files=[list only up to NUM files]:int:'
 	'--max-path=[set the maximun number of characters of the prompt path]:int:'
 	'--no-dir-jumper[disable the directory jumper function]'
-	'--no-cd-auto[force the use of 'cd' to change directories]'
+	'--no-cd-auto[force the use of '\''cd'\'' to change directories]'
 	'--no-classify[Do not append filetype indicators]'
 	'--no-clear-screen[do not clear the screen when listing directories]'
 	'--no-colors[disable filetype colors for files listing]'
@@ -74,7 +76,7 @@ args=(
 	'--no-history[do not write commands into the history file]'
 	'--no-open-auto[same as no-cd-auto, but for files]'
     '--no-props-color[do not colorize files properties]'
-    '--no-refresh-on-resize[do not update the files list on window\'s resize]'
+    '--no-refresh-on-resize[do not update the files list on window'\''s resize]'
     '--no-restore-last-path[do not restore last visited directory at startup]'
 	'--no-suggestions[disable auto-suggestions]'
 	'--no-tips[disable startup tips]'
@@ -82,7 +84,7 @@ args=(
 	'--no-welcome-message[disable the welcome message]'
 	'--only-dirs[list only directories and symbolic links to directories]'
 	'--open[run as a stand-alone resource opener: open FILE and exit]'
-	'--opener=[resource opener to use instead of 'Lira', CliFM built-in opener]:opener:_command_names'
+	'--opener=[resource opener to use instead of '\''Lira'\'', CliFM built-in opener]:opener:_command_names'
 	'--print-sel[always print the list of selected files]'
 	'--rl-vi-mode[set readline to vi editing mode (defaults to emacs editing mode)]'
 	'--secure-cmds[filter commands to prevent command injection]'
@@ -91,7 +93,9 @@ args=(
 	'--share-selbox[make the Selection Box common to different profiles]'
 	'--sort-reverse[sort in reverse order]'
 	'--std-tab-comp[use standard TAB completion]'
-	'--trash-as-rm[the 'r' command executes 'trash' instead of 'rm']'
+	'--trash-as-rm[the '\''r'\'' command executes '\''trash'\'' instead of '\''rm'\'']'
+	'--virtual-dir=[use PATH as CliFM virtual directory]:directory:_directories'
+	'--virtual-dir-full-paths[print full path file names in virtual directories]'
 	'*:filename:_files'
 )
 

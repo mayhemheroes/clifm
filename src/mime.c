@@ -44,6 +44,7 @@
 
 #include "aux.h"
 #include "checks.h"
+#include "config.h"
 #include "exec.h"
 #include "mime.h"
 #include "messages.h"
@@ -125,7 +126,7 @@ skip_line_prefix(char *line)
  * If true, the pointer PATTERN will point to the beginning of the
  * null terminated pattern, and the pointer CMDS will point to the
  * beginnning of the list of opening applications */
-static inline int
+static int
 skip_line(char *line, char **pattern, char **cmds)
 {
 	if (*line == '#' || *line == '[' || *line == '\n')
@@ -149,7 +150,7 @@ skip_line(char *line, char **pattern, char **cmds)
 
 /* Test PATTERN against either FILENAME or the mime-type MIME
  * Returns zero in case of a match, and 1 otherwise */
-static inline int
+static int
 test_pattern(const char *pattern, const char *filename, const char *mime)
 {
 	int ret = EXIT_FAILURE;
@@ -173,7 +174,7 @@ test_pattern(const char *pattern, const char *filename, const char *mime)
 }
 
 /* Return 1 if APP is a valid and existent application. Zero otherwise */
-static inline int
+static int
 check_app_existence(char **app)
 {
 	if (*(*app) == 'a' && *(*app + 1) == 'd' && !*(*app + 2))
@@ -207,7 +208,7 @@ check_app_existence(char **app)
 }
 
 /* Return the first NULL terminated cmd in LINE or NULL */
-static inline char *
+static char *
 get_cmd_from_line(char **line)
 {
 	char *l = *line;
@@ -232,7 +233,7 @@ get_cmd_from_line(char **line)
 }
 
 /* Return the first valid and existent opening application in LINE or NULL */
-static inline char *
+static char *
 retrieve_app(char *line)
 {
 	while (*line) {
@@ -280,8 +281,7 @@ get_app(const char *mime, const char *filename)
 
 	FILE *defs_fp = fopen(mime_file, "r");
 	if (!defs_fp) {
-		fprintf(stderr, _("%s: %s: Error opening file\n"),
-		    PROGRAM_NAME, mime_file);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", mime_file, strerror(errno));
 		return (char *)NULL;
 	}
 
@@ -320,19 +320,23 @@ xmagic(const char *file, const int query_mime)
 
 	magic_t cookie = magic_open(query_mime ? (MAGIC_MIME_TYPE | MAGIC_ERROR)
 					: MAGIC_ERROR);
-	if (!cookie)
+	if (!cookie) {
+//		fprintf(stderr, "%s: xmagic: %s\n", PROGRAM_NAME, strerror(errno));
 		return (char *)NULL;
+	}
 
 	magic_load(cookie, NULL);
 
 	const char *mime = magic_file(cookie, file);
 	if (!mime) {
+/*		const char *err_str = magic_error(cookie);
+		if (err_str)
+			fprintf(stderr, "%s: xmagic: %s\n", PROGRAM_NAME, err_str); */
 		magic_close(cookie);
 		return (char *)NULL;
 	}
 
-	char *str = (char *)xnmalloc(strlen(mime) + 1, sizeof(char));
-	strcpy(str, mime);
+	char *str = savestring(mime, strlen(mime));
 	magic_close(cookie);
 	return str;
 }
@@ -359,14 +363,14 @@ get_mime(char *file)
 
 	FILE *file_fp = fopen(mime_tmp_file, "w");
 	if (!file_fp) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, mime_tmp_file,
-		    strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: fopen: %s: %s\n",
+			mime_tmp_file, strerror(errno));
 		return (char *)NULL;
 	}
 
 	FILE *file_fp_err = fopen("/dev/null", "w");
 	if (!file_fp_err) {
-		fprintf(stderr, "%s: /dev/null: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: /dev/null: %s\n", strerror(errno));
 		fclose(file_fp);
 		return (char *)NULL;
 	}
@@ -376,7 +380,7 @@ get_mime(char *file)
 
 	/* Redirect stdout to the desired file */
 	if (dup2(fileno(file_fp), STDOUT_FILENO) == -1) {
-		fprintf(stderr, "%s: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s\n", strerror(errno));
 		fclose(file_fp);
 		fclose(file_fp_err);
 		return (char *)NULL;
@@ -384,7 +388,7 @@ get_mime(char *file)
 
 	/* Redirect stderr to /dev/null */
 	if (dup2(fileno(file_fp_err), STDERR_FILENO) == -1) {
-		fprintf(stderr, "%s: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s\n", strerror(errno));
 		fclose(file_fp);
 		fclose(file_fp_err);
 		return (char *)NULL;
@@ -421,6 +425,7 @@ get_mime(char *file)
 		unlink(mime_tmp_file);
 		return (char *)NULL;
 	}
+
 	char *tmp = strrchr(line, ' ');
 	if (tmp) {
 		size_t len = strlen(tmp);
@@ -435,37 +440,34 @@ get_mime(char *file)
 }
 #endif /* !_NO_MAGIC */
 
-/* Import MIME definitions from the system and store them into FILE.
- * Returns the amount of definitions found, if any, or -1 in case of error
+/* Import MIME associations from the system and store them into FILE.
+ * Returns the amount of associations found, if any, or -1 in case of error
  * or no association found */
 static int
 mime_import(char *file)
 {
 #if defined(__HAIKU__)
-	fprintf(stderr, "%s: Importing MIME definitions is not supported on Haiku\n",
-			PROGRAM_NAME);
+	fprintf(stderr, "mime: Importing MIME associations is not supported on Haiku\n");
 	return (-1);
 #elif defined(__APPLE__)
-	fprintf(stderr, "%s: Importing MIME definitions is not supported on MacOS\n",
-			PROGRAM_NAME);
+	fprintf(stderr, "mime: Importing MIME associations is not supported on MacOS\n");
 	return (-1);
 #endif
-	/* If not in X, exit */
-	if (!(flags & GUI)) {
-		fprintf(stderr, _("%s: Nothing was imported. No graphical "
-				"environment found\n"), PROGRAM_NAME);
+
+	if (!(flags & GUI)) { /* Not in X, exit */
+		fprintf(stderr, _("mime: Nothing was imported. No graphical environment found\n"));
 		return (-1);
 	}
 
 	if (!user.home) {
-		fprintf(stderr, _("%s: Error getting home directory\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("mime: Error getting home directory\n"));
 		return (-1);
 	}
 
-	/* Open the local MIME file */
+	/* Open the new mimelist file */
 	FILE *mime_fp = fopen(file, "w");
 	if (!mime_fp) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: fopen: %s: %s\n", file, strerror(errno));
 		return (-1);
 	}
 
@@ -483,8 +485,7 @@ mime_import(char *file)
 	    "/usr/share/applications/mimeapps.list",
 	    "/etc/xdg/mimeapps.list", NULL};
 
-	/* Check each mimeapps.list file and store its associations into
-	 * FILE */
+	/* Check each mimeapps.list file and store its associations into FILE */
 	size_t i;
 	int mime_defs = 0;
 
@@ -497,15 +498,16 @@ mime_import(char *file)
 		size_t line_size = 0;
 		char *line = (char *)NULL;
 		/* Only store associations in the "Default Applications" section */
-		int da_found = 0;
+		int header_found = 0;
 
 		while (getline(&line, &line_size, sys_mime_fp) > 0) {
-			if (!da_found && strncmp(line, "[Default Applications]", 22) == 0) {
-				da_found = 1;
+			if (!header_found && (strncmp(line, "[Default Applications]", 22) == 0
+			|| strncmp(line, "[Added Associations]", 20) == 0)) {
+				header_found = 1;
 				continue;
 			}
 
-			if (da_found) {
+			if (header_found == 1) {
 				if (*line == '[')
 					break;
 				if (*line == '#' || *line == '\n')
@@ -528,17 +530,8 @@ mime_import(char *file)
 	free(config_path);
 	free(local_path);
 
-	if (mime_defs == 0) {
-		fprintf(stderr, _("%s: Nothing was imported. No MIME definitions "
-			"found\n"), PROGRAM_NAME);
-	}
-
-	/* Make sure there is an entry for text/plain files, so that at least
-	 * 'mm edit' will work */
-	fputs("X:text/plain=nano;vim;vi;emacs;ed;vis;micro;kakoune;"
-		  "gedit;kate;pluma;mousepad;leafpad;fetchpad\n"
-		  "!X:text/plain=nano;vim;vi;emacs;ed;vis;micro;kakoune\n",
-		  mime_fp);
+	if (mime_defs == 0)
+		fprintf(stderr, _("mime: Nothing was imported. No MIME association found\n"));
 
 	fclose(mime_fp);
 	return mime_defs;
@@ -547,12 +540,28 @@ mime_import(char *file)
 static int
 mime_edit(char **args)
 {
+	if (xargs.stealth_mode == 1) {
+		printf("%s: mime: %s\n", PROGRAM_NAME, STEALTH_DISABLED);
+		return EXIT_SUCCESS;
+	}
+
+	if (!mime_file || !*mime_file) {
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: The mimelist file name is undefined\n");
+		return EXIT_FAILURE;
+	}
+
 	int exit_status = EXIT_SUCCESS;
 	struct stat a;
-	if (!mime_file || stat(mime_file, &a) == -1) {
-		fprintf(stderr, "%s: Cannot access the mimelist file. %s\n", PROGRAM_NAME,
-			strerror(ENOENT));
-		return ENOENT;
+	if (stat(mime_file, &a) == -1) {
+		if (create_mime_file(mime_file, 1) != EXIT_SUCCESS) {
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: Cannot access "
+				"the mimelist file. %s\n", strerror(ENOENT));
+			return ENOENT;
+		}
+		if (stat(mime_file, &a) == -1) {
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", mime_file, strerror(errno));
+			return errno;
+		}
 	}
 
 	time_t prev = a.st_mtime;
@@ -585,9 +594,11 @@ static char *
 get_filename(char *file_path)
 {
 	char *f = strrchr(file_path, '/');
+	if (f && *(++f))
+		return f;
 
-	if (f)
-		return (f + 1);
+/*	if (f)
+		return (f + 1); */
 
 	return (char *)NULL;
 }
@@ -909,8 +920,7 @@ mime_open_with_tab(char *filename, const char *prefix)
 					 * value */
 					appb = savestring(app, strlen(app));
 					/* app: the expanded value */
-					app = (char *)xrealloc(app, (app_len + strlen(t) + 1)
-							* sizeof(char));
+					app = (char *)xrealloc(app, (app_len + strlen(t) + 1) * sizeof(char));
 					strcpy(app, t);
 					free(t);
 				} else {
@@ -999,7 +1009,7 @@ FAIL:
 	return (char **)NULL;
 }
 
-static inline int
+static int
 run_cmd_noargs(char *arg, char *name)
 {
 	errno = 0;
@@ -1018,11 +1028,11 @@ run_cmd_noargs(char *arg, char *name)
 	if (ret == EXIT_SUCCESS)
 		return EXIT_SUCCESS;
 
-	fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, arg, strerror(ret));
+	_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", arg, strerror(ret));
 	return EXIT_FAILURE;
 }
 
-static inline void
+static void
 append_params(char **args, char *name, char ***cmd)
 {
 	size_t i, n = 1, f = 0;
@@ -1060,7 +1070,7 @@ append_params(char **args, char *name, char ***cmd)
 	(*cmd)[n] = (char *)NULL;
 }
 
-static inline int
+static int
 run_cmd_plus_args(char **args, char *name)
 {
 	size_t i;
@@ -1093,7 +1103,7 @@ join_and_run(char **args, char *name)
 	if (!args[1])
 		return run_cmd_noargs(args[0], name);
 
-	/* Application name plus paramters */
+	/* Application name plus parameters */
 	return run_cmd_plus_args(args, name);
 }
 
@@ -1329,7 +1339,6 @@ mime_open_url(char *url)
 		return EXIT_FAILURE;
 
 	char *app = get_app("text/html", 0);
-
 	if (!app)
 		return EXIT_FAILURE;
 
@@ -1350,33 +1359,23 @@ mime_open_url(char *url)
 static int
 import_mime(void)
 {
-	time_t rawtime = time(NULL);
-	struct tm tm;
-	localtime_r(&rawtime, &tm);
-	char date[64];
-	strftime(date, sizeof(date), "%b %d %H:%M:%S %Y", &tm);
-
-	char suffix[68];
-	snprintf(suffix, 67, "%d%d%d%d%d%d", tm.tm_year + 1900,
-	    tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-
+	char *suffix = gen_rand_str(6);
 	char new[PATH_MAX];
-	snprintf(new, PATH_MAX - 1, "%s.%s", mime_file, suffix);
-	rename(mime_file, new);
+	snprintf(new, sizeof(new), "%s.%s", mime_file, suffix ? suffix : "5i0TM#");
+	free(suffix);
 
-	int mime_defs = mime_import(mime_file);
+	int mime_defs = mime_import(new);
 	if (mime_defs > 0) {
-		printf(_("%s: %d MIME definition(s) imported from the system. "
-			"Old MIME list file stored as %s\n"),
-			PROGRAM_NAME, mime_defs, new);
+		printf(_("%d MIME association(s) imported from the system\n"
+			"File stored as %s\nAdd these new associations to your mimelist "
+			"file running 'mm edit'\n"), mime_defs, new);
 		return EXIT_SUCCESS;
 	}
 
-	rename(new, mime_file);
 	return EXIT_FAILURE;
 }
 
-static inline int
+static int
 mime_info(char *arg, char **fpath, char **deq)
 {
 	if (!arg) {
@@ -1394,13 +1393,13 @@ mime_info(char *arg, char **fpath, char **deq)
 	}
 
 	if (!*fpath) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, arg,
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", arg,
 		    (is_number(arg) == 1) ? _("No such ELN") : strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	if (access(*fpath, R_OK) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, *fpath, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", *fpath, strerror(errno));
 		free(*fpath);
 		return EXIT_FAILURE;
 	}
@@ -1409,8 +1408,8 @@ mime_info(char *arg, char **fpath, char **deq)
 }
 
 /* Get the full path of the file to be opened by mime
- * Returns 1 on success and 0 on error */
-static inline int
+ * Returns 0 on success and 1 on error */
+static int
 get_open_file_path(char **args, char **fpath, char **deq)
 {
 	char *f = (char *)NULL;
@@ -1430,13 +1429,13 @@ get_open_file_path(char **args, char **fpath, char **deq)
 	if (!*fpath) {
 		*fpath = realpath(f, NULL);
 		if (!*fpath) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, f, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", f, strerror(errno));
 			return EXIT_FAILURE;
 		}
 	}
 
 	if (access(*fpath, R_OK) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, *fpath, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mime: %s: %s\n", *fpath, strerror(errno));
 		free(*fpath);
 		return EXIT_FAILURE;
 	}
@@ -1445,8 +1444,8 @@ get_open_file_path(char **args, char **fpath, char **deq)
 }
 
 /* Handle mime when no opening app has been found */
-static inline int
-handle_no_app(int info, char **fpath, char **mime, char *arg)
+static int
+handle_no_app(const int info, char **fpath, char **mime, const char *arg)
 {
 	if (info) {
 		fputs(_("Associated application: None\n"), stderr);
@@ -1462,12 +1461,10 @@ handle_no_app(int info, char **fpath, char **mime, char *arg)
 
 			return exit_status;
 		} else {
-			fprintf(stderr, _("%s: %s: No associated application "
-					"found\n"), PROGRAM_NAME, arg);
+			fprintf(stderr, _("mime: %s: No associated application found\n"), arg);
 		}
 #else
-		fprintf(stderr, _("%s: %s: No associated application "
-				"found\n"), PROGRAM_NAME, arg);
+		fprintf(stderr, _("mime: %s: No associated application found\n"), arg);
 #endif
 	}
 
@@ -1477,22 +1474,22 @@ handle_no_app(int info, char **fpath, char **mime, char *arg)
 	return EXIT_FAILURE;
 }
 
-static inline int
+static int
 print_error_no_mime(char **fpath)
 {
-	fprintf(stderr, _("%s: Error getting mime-type\n"), PROGRAM_NAME);
+	_err(ERR_NO_STORE, NOPRINT_PROMPT, _("mime: Error getting mime-type\n"));
 	free(*fpath);
 	return EXIT_FAILURE;
 }
 
-static inline void
+static void
 print_info_name_mime(char *filename, char *mime)
 {
 	printf(_("Name: %s\n"), filename ? filename : _("None"));
 	printf(_("MIME type: %s\n"), mime);
 }
 
-static inline int
+static int
 print_mime_info(char **app, char **fpath, char **mime)
 {
 	if (*(*app) == 'a' && (*app)[1] == 'd' && !(*app)[2]) {
@@ -1510,7 +1507,8 @@ print_mime_info(char **app, char **fpath, char **mime)
 	return EXIT_SUCCESS;
 }
 
-static inline int
+#ifndef _NO_ARCHIVING
+static int
 run_archiver(char **fpath, char **app)
 {
 	char *cmd[] = {"ad", *fpath, NULL};
@@ -1521,6 +1519,7 @@ run_archiver(char **fpath, char **app)
 
 	return exit_status;
 }
+#endif /* _NO_ARCHIVING */
 
 static void
 set_exec_flags(char *s, int *f)
@@ -1538,7 +1537,7 @@ set_exec_flags(char *s, int *f)
 
 /* Expand %f placeholder, stderr/stdout flags, and environment variables
  * in the opening application line */
-static inline size_t
+static size_t
 expand_app_fields(char ***cmd, size_t *n, char *fpath, int *exec_flags)
 {
 	size_t f = 0, i;
@@ -1585,7 +1584,7 @@ expand_app_fields(char ***cmd, size_t *n, char *fpath, int *exec_flags)
 }
 
 /* Open the file FPATH via the application APP */
-static inline int
+static int
 run_mime_app(char **app, char **fpath)
 {
 	char **cmd = split_str(*app, NO_UPDATE_ARGS);
@@ -1625,12 +1624,12 @@ run_mime_app(char **app, char **fpath)
 
 #ifdef _NO_MAGIC
 /* Check the existence of the 'file' command */
-static inline int
+static int
 check_file_cmd(void)
 {
 	char *p = get_cmd_path("file");
 	if (!p) {
-		fprintf(stderr, _("%s: file: Command not found\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("mime: file: Command not found\n"));
 		return EXIT_FAILURE;
 	}
 
@@ -1639,7 +1638,7 @@ check_file_cmd(void)
 }
 #endif /* _NO_MAGIC */
 
-static inline int
+static int
 print_mime_help(void)
 {
 	puts(_(MIME_USAGE));
@@ -1678,7 +1677,7 @@ mime_open(char **args)
 	}
 
 	if (!file_path) {
-		fprintf(stderr, "%s: %s\n", args[file_index], strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s\n", args[file_index], strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -1720,5 +1719,5 @@ mime_open(char **args)
 	return run_mime_app(&app, &file_path);
 }
 #else
-;
+void *__skip_me_lira;
 #endif /* !_NO_LIRA */

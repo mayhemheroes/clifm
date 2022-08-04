@@ -4,6 +4,8 @@
 # Written by L. Abramovich
 # License: GPL3
 
+# Dependencies: man, sed, less, fzf or rofi
+
 if [ -n "$1" ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
 	name="${CLIFM_PLUGIN_NAME:-$(basename "$0")}"
 	printf "Interactively browse the CliFM manpage via FZF or Rofi\n"
@@ -12,14 +14,14 @@ if [ -n "$1" ] && { [ "$1" = "--help" ] || [ "$1" = "-h" ]; }; then
 fi
 
 if ! type man > /dev/null 2>&1; then
-	printf "CliFM: man: Command not found\n" >&2
-	exit 1
+	printf "clifm: man: Command not found\n" >&2
+	exit 127
 fi
 
 manpage="$(man -w clifm)"
 
 if ! [ -f "$manpage" ]; then
-	printf "CliFM: no manpage found\n" >&2
+	printf "clifm: no manpage found\n" >&2
 	exit 1
 fi
 
@@ -29,7 +31,7 @@ if type fzf >/dev/null 2>&1; then
 elif type rofi >/dev/null 2>&1; then
 	filter="rofi"
 else
-	printf "CliFM: No finder found. Install either fzf or rofi\n" >&2
+	printf "clifm: No finder found. Install either fzf or rofi\n" >&2
 	exit 1
 fi
 
@@ -50,27 +52,28 @@ fi
 CMDS="1. GETTING HELP@
 2. DESCRIPTION@
 3. FEATURES@
-4. POSITIONAL PARAMETERS@
-5. OPTIONS@
-6. COMMANDS@
-7. FILE FILTERS@
-8. KEYBOARD SHORTCUTS@
-9. THEMING@
-10. BUILT-IN EXPANSIONS@
-11. RESOURCE OPENER@
-12. AUTO-SUGGESTIONS@
-13. SHELL FUNCTIONS@
-14. PLUGINS@
-15. AUTOCOMMANDS@
-16. FILE TAGS@
-17. STANDARD INPUT@
-18. NOTE ON SPEED
-19. KANGAROO FRECENCY ALGORITHM@
-20. ENVIRONMENT@
-21. SECURITY@
-22. MISCELLANEOUS NOTES@
-23. FILES@
-24. EXAMPLES@
+4. PARAMETERS@
+POSITIONAL PARAMETERS@
+OPTIONS@
+5. COMMANDS@
+6. FILE FILTERS@
+7. KEYBOARD SHORTCUTS@
+8. THEMING@
+9. BUILT-IN EXPANSIONS@
+10. RESOURCE OPENER@
+11. AUTO-SUGGESTIONS@
+12. SHELL FUNCTIONS@
+13. PLUGINS@
+14. AUTOCOMMANDS@
+15. FILE TAGS@
+16. VIRTUAL DIRECTORIES@
+17. NOTE ON SPEED
+18. KANGAROO FRECENCY ALGORITHM@
+19. ENVIRONMENT@
+20. SECURITY@
+21. MISCELLANEOUS NOTES@
+22. FILES@
+23. EXAMPLES@
 FILE/DIR@
 /PATTERN@
 ;\[CMD\], :\[CMD\]@
@@ -158,7 +161,7 @@ while [ -n "$a" ]; do
 	fi
 
 	if [ -n "$a" ]; then
-		if echo "$a" | grep -q '^[1-9].*'; then
+		if echo "$a" | grep -q '^[1-9,A-Z].*'; then
 			# shellcheck disable=SC2089
 			export PAGER="less -gp \"$a\""
 		else

@@ -38,6 +38,13 @@
 # include <sys/sysctl.h>
 #endif
 
+#ifdef __OpenBSD__
+typedef char *rl_cpvfunc_t;
+# include <ereadline/readline/readline.h>
+#else
+# include <readline/readline.h>
+#endif
+
 /*
 #if defined(__HAIKU__)
 #include <private/libs/compat/freebsd_network/compat/sys/mount.h>
@@ -45,7 +52,6 @@
 #endif */
 #include <time.h>
 #include <unistd.h>
-#include <readline/readline.h>
 #ifdef LINUX_INOTIFY
 # include <sys/inotify.h>
 #endif
@@ -68,13 +74,36 @@
 #include "strings.h"
 #include "remotes.h"
 #include "messages.h"
+#include "file_operations.h"
+
+/* Set ELN color according to the current workspace */
+void
+set_eln_color(void)
+{
+	switch(cur_ws) {
+	case 0: strcpy(el_c, *ws1_c ? ws1_c : DEF_EL_C); break;
+	case 1: strcpy(el_c, *ws2_c ? ws2_c : DEF_EL_C); break;
+	case 2: strcpy(el_c, *ws3_c ? ws3_c : DEF_EL_C); break;
+	case 3: strcpy(el_c, *ws4_c ? ws4_c : DEF_EL_C); break;
+	case 4: strcpy(el_c, *ws5_c ? ws5_c : DEF_EL_C); break;
+	case 5: strcpy(el_c, *ws6_c ? ws6_c : DEF_EL_C); break;
+	case 6: strcpy(el_c, *ws7_c ? ws7_c : DEF_EL_C); break;
+	case 7: strcpy(el_c, *ws8_c ? ws8_c : DEF_EL_C); break;
+	default: strcpy(el_c, DEF_EL_C); break;
+	}
+}
 
 /* Custom POSIX implementation of GNU asprintf() modified to log program
- * messages. MSG_TYPE is one of: 'e', 'f', 'w', 'n', or zero (meaning this
+ * messages.
+ * MSG_TYPE is one of: 'e', 'f', 'w', 'n', zero (meaning this
  * latter that no message mark (E, W, or N) will be added to the prompt).
+ * Messages with a msg_type on 'n' (or -1) are not logged
  * 'f' means that the message must be printed forcefully, even if identical
  * to the previous one, without printing any message mark.
- * PROMPT tells whether to print the message immediately before the
+ * MSG_TYPE also accepts -1 and -2 as values:
+ * -1: Print the message but do not log it
+ * -2: Log but do not store the message into the messages array
+ * PROMPT_FLAG tells whether to print the message immediately before the next
  * prompt or rather in place.
  * Based on littlstar's xasprintf implementation:
  * https://github.com/littlstar/asprintf.c/blob/master/asprintf.c*/
@@ -82,7 +111,7 @@ __attribute__((__format__(__printf__, 3, 0)))
 /* We use __attribute__ here to silence clang warning: "format string is
  * not a string literal" */
 int
-_err(int msg_type, int prompt, const char *format, ...)
+_err(int msg_type, int prompt_flag, const char *format, ...)
 {
 	va_list arglist, tmp_list;
 
@@ -97,27 +126,32 @@ _err(int msg_type, int prompt, const char *format, ...)
 	}
 
 	char *buf = (char *)xnmalloc((size_t)size + 1, sizeof(char));
-
 	vsprintf(buf, format, arglist);
 	va_end(arglist);
 
 	/* If the new message is the same as the last message, skip it */
-	if (msgs_n && msg_type != 'f' && strcmp(messages[msgs_n - 1], buf) == 0) {
-		free(buf);
-		return EXIT_SUCCESS;
-	}
+	if (msgs_n > 0 && msg_type != 'f' && strcmp(messages[msgs_n - 1], buf) == 0)
+		{free(buf); return EXIT_SUCCESS;}
 
 	if (buf) {
-		if (msg_type) {
+		if (msg_type >= 'e') {
 			switch (msg_type) {
 			case 'e': pmsg = ERROR; msgs.error++; break;
 			case 'w': pmsg = WARNING; msgs.warning++; break;
 			case 'n': pmsg = NOTICE; msgs.notice++; break;
-			default: pmsg = NOMSG;
+			default: pmsg = NOMSG; break;
 			}
 		}
 
-		log_msg(buf, (prompt == 1) ? PRINT_PROMPT : NOPRINT_PROMPT);
+		int logme = msg_type == ERR_NO_LOG ? 0 : (msg_type == 'n' ? -1 : 1);
+		int add_to_msgs_list = 1;
+		if (msg_type == ERR_NO_STORE) {
+			add_to_msgs_list = 0;
+			logme = 1;
+//			prompt_flag = NOPRINT_PROMPT;
+		}
+		log_msg(buf, prompt_flag, logme, add_to_msgs_list);
+
 		free(buf);
 		return EXIT_SUCCESS;
 	}
@@ -170,16 +204,15 @@ reset_inotify(void)
 		inotify_wd = -1;
 	}
 
-	close(inotify_fd);
+	if (inotify_fd != UNSET)
+		close(inotify_fd);
 	inotify_fd = inotify_init1(IN_NONBLOCK);
 	if (inotify_fd < 0) {
-		_err('w', PRINT_PROMPT, "%s: inotify: %s\n", PROGRAM_NAME,
-			strerror(errno));
+		_err('w', PRINT_PROMPT, "%s: inotify: %s\n", PROGRAM_NAME, strerror(errno));
 		return;
 	}
 
-	inotify_wd = inotify_add_watch(inotify_fd, workspaces[cur_ws].path,
-				INOTIFY_MASK);
+	inotify_wd = inotify_add_watch(inotify_fd, workspaces[cur_ws].path, INOTIFY_MASK);
 	if (inotify_wd > 0)
 		watch = 1;
 }
@@ -240,9 +273,10 @@ read_inotify(void)
 				&& strcmp(file_info[j].name, event->name) == 0)
 					break;
 			}
-			if (j < 0)
+
+			if (j < 0) {
 				ignore_event = 0;
-			else {
+			} else {
 				/* If destiny file name is already in the files list,
 				 * ignore this event */
 				ignore_event = 1;
@@ -311,8 +345,7 @@ void
 read_kqueue(void)
 {
 	struct kevent event_data[NUM_EVENT_SLOTS];
-	memset((void *)event_data, '\0', sizeof(struct kevent)
-			* NUM_EVENT_SLOTS);
+	memset((void *)event_data, '\0', sizeof(struct kevent) * NUM_EVENT_SLOTS);
 
 	int i, refresh = 0;
 	int count = kevent(kq, NULL, 0, event_data, 4096, &timeout);
@@ -324,10 +357,8 @@ read_kqueue(void)
 		}
 	}
 
-	if (refresh) {
-		free_dirlist();
-		if (list_dir() != EXIT_SUCCESS)
-			exit_code = EXIT_FAILURE;
+	if (refresh == 1) {
+		reload_dirlist();
 		return;
 	}
 
@@ -364,7 +395,8 @@ unset_filter(void)
 	free(_filter);
 	_filter = (char *)NULL;
 	regfree(&regex_exp);
-	if (autols == 1) reload_dirlist();
+	if (autols == 1)
+		reload_dirlist();
 	puts(_("Filter unset"));
 	filter_rev = 0;
 
@@ -381,7 +413,8 @@ compile_filter(void)
 		_filter = (char *)NULL;
 		regfree(&regex_exp);
 	} else {
-		if (autols == 1) reload_dirlist();
+		if (autols == 1)
+			reload_dirlist();
 		print_reload_msg(_("%s: New filter successfully set\n"), _filter);
 	}
 
@@ -441,137 +474,138 @@ print_tips(int all)
 		"Use wildcards and regular expressions to select files: "
 		"'s *.c' or 's .*\\.c$'",
 		"ELN's and the 'sel' keyword work for shell commands as well: "
-		"'file 1 sel'",
-		"Press TAB to automatically expand an ELN: 's 2' -> TAB -> 's FILENAME'",
+		"'ls -ld 1 sel'",
+		"Press TAB to automatically expand an ELN: 's 2<TAB>' -> 's FILENAME'",
 		"Easily copy everything in CWD into another directory: 's * && c sel ELN/DIR'",
-		"Use ranges (ELN-ELN) to easily move multiple files: 'm 3-12 "
-		"ELN/DIR'",
+		"Use ranges (ELN-ELN) to easily move multiple files: 'm 3-12 ELN/DIR'",
 		"Trash files with a simple 't ELN'",
 		"Get mime information for a file: 'mm info ELN'",
 		"If too many files are listed, try enabling the pager ('pg on')",
 		"Once in the pager, go backwards pressing the keyboard shortcut "
 		"provided by your terminal emulator",
 		"Once in the pager, press 'q' to stop it",
-		"Press 'Alt-l' to switch to long view mode",
+		"Press Alt-l to switch to long view mode",
 		"Search for files using the slash command: '/*.png'",
 		"The search function allows regular expressions: '/^c'",
 		"Add a new bookmark by just entering 'bm a ELN/FILE'",
 		"Use c, l, m, md, and r instead of cp, ln, mv, mkdir, and rm",
 		"Access a remote file system using the 'net' command",
 		"Manage default associated applications with the 'mime' command",
-		"Go back and forth in the directory history with 'Alt-j' and 'Alt-k' "
+		"Go back and forth in the directory history with Alt-j and Alt-k "
 		"or Shift-Left and Shift-Right",
 		"Open a new instance of CliFM with the 'x' command: 'x ELN/DIR'",
 		"Send a command directly to the system shell with ';CMD'",
-		"Run the last executed command by just running '!!'",
+		"Run the last executed command: '!!'",
+		"Access the commands history list: '!<TAB>'",
+		"Access the search patterns history list: '/<TAB>'",
 		"Import aliases from file using 'alias import FILE'",
 		"List available aliases by running 'alias'",
-		"Create aliases to easily run your preferred commands",
-		"Open and edit the configuration file with 'edit' or F10",
-		"Find a description for each CliFM command by running 'cmd'",
+		"Create aliases to easily run your preferred commands (F10)",
+		"Open and edit the configuration file: 'edit' or F10",
+		"Get a brief description for each CliFM command by running 'cmd'",
 		"Print the currently used color codes list by entering 'cc'",
-		"Press 'Alt-i' or 'Alt-.' to toggle hidden files on/off",
-		"List mountpoints by pressing 'Alt-m'",
+		"Press Alt-. to toggle hidden files on/off",
+		"List mountpoints by pressing Alt-m",
 		"Disallow the use of shell commands with the -x option: 'clifm -x'",
-		"Go to the root directory by just pressing 'Alt-r'",
-		"Go to the home directory by just pressing 'Alt-e'",
-		"Press 'F8' to open and edit the current color scheme",
-		"Press 'F9' to open and edit the keybindings file",
-		"Press 'F10' to open and edit the configuration file",
-		"Press 'F11' to open and edit the bookmarks file",
+		"Go to the root directory by just pressing Alt-r",
+		"Go to the home directory by just pressing Alt-e",
+		"Press F8 to open and edit the current color scheme",
+		"Press F9 to open and edit the keybindings file",
+		"Press F10 to open and edit the configuration file",
+		"Press F11 to open and edit the bookmarks file",
 		"Set the starting path: 'clifm PATH'",
 		"Use the 'o' command to open files and directories: 'o 12'",
-		"Open a file or directory by just typing its ELN of file name",
-		"Bypass the resource opener specifying an application: '12 "
-		"leafpad'",
-		"Open a file and send it to the background running '24&'",
-		"Create a custom prompt editing the color scheme file ('cs edit')",
-		"Customize color codes via 'cs edit' command (F6)",
-		"Open the bookmarks manager by just pressing 'Alt-b'",
+		"Open a file or directory by just typing its ELN or file name",
+		"Bypass the resource opener specifying an application: '12 leafpad'",
+		"Open a file and send it to the background: '24&'",
+		"Create a custom prompt editing the prompts file ('prompt edit')",
+		"Customize your color scheme: 'cs edit' or F6",
+		"Open the bookmarks manager with Alt-b",
 		"Chain commands using ; and &&: 's 2 7-10; r sel'",
 		"Add emojis to the prompt by copying them to the Prompt line "
-		"in the color scheme file ('cs edit')",
+		"in the prompts file ('prompt edit')",
 		"Create a new profile running 'pf add PROFILE' or 'clifm -P PROFILE'",
 		"Switch profiles using 'pf set PROFILE'",
 		"Delete a profile using 'pf del PROFILE'",
-		"Copy selected files into CWD by just running 'v sel' or "
-		"pressing Ctrl-Alt-v",
+		"Copy selected files into CWD: 'c sel' or Ctrl-Alt-v",
 		"Use 'p ELN' to print file properties for ELN",
-		"Deselect all selected files by pressing 'Alt-d'",
-		"Select all files in CWD by pressing 'Alt-a'",
-		"Jump to the Selection Box by pressing 'Alt-s'",
+		"Deselect all selected files with Alt-d",
+		"Select all files in the current directory: 'Alt-a'",
+		"Jump to the Selection Box by pressing Alt-s",
 		"Restore trashed files using the 'u' command",
-		"Empty the trash bin running 't clear'",
-		"Press Alt-f to toggle list-folders-first on/off",
-		"Use the 'fc' command to disable the files counter",
+		"Empty the trash can: 't empty'",
+		"Press Alt-g to toggle list-directories-first on/off",
+		"Use the 'fc' command to toggle the files counter on/off",
 		"Take a look at the splash screen with the 'splash' command",
 		"Have some fun trying the 'bonus' command",
 		"Launch the default system shell in CWD using ':' or ';'",
-		"Use 'Alt-z' and 'Alt-x' to switch sorting methods",
+		"Use Alt-z and 'Alt-x to switch sorting methods",
 		"Reverse sorting order using the 'rev' option: 'st rev'",
 		"Compress and decompress files using the 'ac' and 'ad' "
-		"commands respectively",
-		"Rename multiple files at once with the bulk rename function: "
-		"'br *.txt'",
+		"commands respectively: 'ac sel' or 'ad FILE.zip'",
+		"Rename multiple files at once: 'br *.txt'",
 		"Need no more tips? Disable this feature in the configuration file",
 		"Need root privileges? Launch a new instance of CliFM as root "
-		"running the 'X' command",
+		"running the 'X' command (note the uppercase)",
 #ifdef __linux__
 		"Manage removable devices via the 'media' command",
 #endif
-		"Create custom commands and features using the 'actions' command",
-		"Create a fresh configuration file by running 'edit reset'",
+		"Create a fresh configuration file: 'edit reset'",
 		"Use 'ln edit' (or 'le') to edit symbolic links",
 		"Change default keyboard shortcuts by editing the keybindings file (F9)",
 		"Keep in sight previous and next visited directories enabling the "
-		"DirhistMap option in the configuration file",
+		"DirhistMap option in the configuration file (F10)",
 		"Leave no traces at all running in stealth mode (-S)",
 		"Pin a file via the 'pin' command and then use it with the "
 		"period keyword (,). Ex: 'pin DIR' and then 'cd ,'",
 		"Switch between color schemes using the 'cs' command",
-		"Try the 'j' command to quickly navigate through visited directories",
+		"Try the 'j' command to quickly jump into any visited directory",
 		"Switch workspaces by pressing Alt-[1-4]",
 		"Use the 'ws' command to list available workspaces",
 		"Take a look at available plugins using the 'actions' command",
 		"Space is not needed: enter 'p12' instead of 'p 12'",
 		"When searching or selecting files, use the exclamation mark "
-		"to reverse the meaning of a pattern",
+		"to reverse the meaning of a pattern: 's !*.pdf'",
 		"Enable the TrashAsRm option to prevent accidental deletions",
-		"Don't like ELN's? Disable them using the -e option",
-		"Use the 'n' command to create multiple files and/or directories",
-		"Customize your prompt by adding prompt commands via the 'edit' command (F10)",
+		"Don't like ELN's? Disable them using the -e command line switch",
+		"Use the 'n' command to create multiple files and/or directories: 'n FILE DIR/'",
+		"Add prompt commands via the 'promptcmd' keyword: 'edit' (F10)",
 		"Need git integration? Consult the manpage",
 		"Accept a given suggestion by pressing the Right arrow key",
 		"Accept only the first suggested word by pressing Alt-f or Alt-Right",
 		"Enter 'c sel' to copy selected files into the current directory",
-		"Take a look at available plugins via the 'actions' command",
 		"Press Alt-q to delete the last typed word",
-		"Check ELN ranges by pressing TAB",
-		"Operate on specific selected files by typing 'sel' and then TAB",
+		"Check ELN ranges by pressing TAB: '1-12<TAB>'",
+		"Operate on specific selected files: 'sel<TAB>'",
 		"Use the 'ow' command to open a file with an specific application",
-		"Use the 'mf' command to limit the amount of files listed on the screen",
+		"Limit the amount of files listed on the screen via the 'mf' command",
 		"Set a maximum file name length for listed files via the MaxFilenameLen "
 		"option in the configuration file (F10)",
-		"Use the 'm' command to interactively rename a file",
+		"Use the 'm' command to interactively rename a file: 'm 12'",
 		"Set options on a per directory basis via the autocommands function",
 		"Clean up non-ASCII file names using the 'bleach' command",
 		"Running in an untrusted environment? Try the --secure-env and "
-		"--secure-cmds options",
-		"Get help for any internal command via the -h or --help parameters",
-		"Run in disk usage analyzer mode using the -t command line option",
+		"--secure-cmds command line switches",
+		"Get help for any internal command via the -h or --help parameters: 'p -h'",
+		"Run in disk usage analyzer mode using the -t command line switch",
 		"Enable icons with 'icons on'",
 		"Quickly change to a parent directory using the 'bd' command",
 		"Use 'stats' to print statistics on files in the current directory",
-		"Customize the warning prompt by setting WarningPromptStr in the color scheme file",
+		"Customize the warning prompt by setting WarningPrompt in the prompts file ('prompt edit')",
 		"Enter '-' to run the fzfnav plugin (includes files preview)",
 		"Create multiple links at once using the 'bl' command",
 		"Organize your files using tags. Try 'tag --help'",
 		"Remove files in bulk using a text editor with 'rr'",
-		"Press 'Ctrl-Alt-l' to toggle max file name length on/off",
-		"Easily send files to a remote location with the 'cr' command",
-		"Quickly change your prompt via 'prompt NAME'",
-		"Press Ctrl-Alt-i to toggle the disk usage analyzer mode",
 		"Press Ctrl-Alt-l to toggle max file name length on/off",
+		"Easily send files to a remote location with the 'cr' command",
+		"Quickly switch prompts via 'prompt NAME'",
+		"Press Alt-TAB to toggle the disk usage analyzer mode",
+		"Press Ctrl-Alt-l to toggle max file name length on/off",
+		"Fuzzy completion is supported: 'dwn<TAB> -> Downloads'. Enable it via '--fuzzy-match'",
+		"Wildcards can be expanded via TAB: 's *.c<TAB>'",
+		"Try the help topics: 'help <TAB>'",
+		"List symlinks in the current directory: '=l<TAB>'. Enter 'help file-details' for more information",
+		"Use PropFields in the configuration file to toggle fields on/off in long view mode",
 		NULL};
 
 	size_t tipsn = (sizeof(TIPS) / sizeof(TIPS[0])) - 1;
@@ -621,7 +655,7 @@ check_dir(char **dir)
 	int ret = EXIT_SUCCESS;
 	struct stat attr;
 	if (stat(*dir, &attr) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, *dir, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, *dir, strerror(errno));
 		return errno;
 	}
 
@@ -700,7 +734,7 @@ get_cmd(char *dir, char *_sudo, char *self, const int sudo)
 static int
 launch_new_instance_cmd(char ***cmd, char **self, char **_sudo, char **dir, int sudo)
 {
-	int ret = 0; 
+	int ret = 0;
 
 	if (*cmd) {
 		ret = launch_execve(*cmd, BACKGROUND, E_NOFLAG);
@@ -748,7 +782,8 @@ new_instance(char *dir, const int sudo)
 
 	char *deq_dir = dequote_str(dir, 0);
 	if (!deq_dir) {
-		fprintf(stderr, _("%s: %s: Error dequoting file name\n"), PROGRAM_NAME, dir);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error dequoting file name\n"),
+			PROGRAM_NAME, dir);
 		free(_sudo);
 		return EXIT_FAILURE;
 	}
@@ -757,7 +792,7 @@ new_instance(char *dir, const int sudo)
 	if (!self) {
 		free(_sudo);
 		free(deq_dir);
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, PNL, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, PNL, strerror(errno));
 		return errno;
 	}
 
@@ -789,26 +824,27 @@ alias_import(char *file)
 	if (*file == '~') {
 		char *file_exp = tilde_expand(file);
 		if (!file_exp) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
 			return EXIT_FAILURE;
 		}
 
 		if (realpath(file_exp, rfile) == NULL) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file_exp,
-					strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+				file_exp, strerror(errno));
 			free(file_exp);
 			return EXIT_FAILURE;
 		}
 		free(file_exp);
 	} else {
 		if (realpath(file, rfile) == NULL) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+				file, strerror(errno));
 			return EXIT_FAILURE;
 		}
 	}
 
 	if (rfile[0] == '\0') {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -816,15 +852,15 @@ alias_import(char *file)
 	int fd;
 	FILE *fp = open_fstream_r(rfile, &fd);
 	if (!fp) {
-		fprintf(stderr, "b%s: '%s': %s\n", PROGRAM_NAME, rfile, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME, rfile, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	/* Open CliFM's config file as well */
 	FILE *config_fp = fopen(config_file, "a");
 	if (!config_fp) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, config_file,
-		    strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+			config_file, strerror(errno));
 		close_fstream(fp, fd);
 		return EXIT_FAILURE;
 	}
@@ -845,8 +881,7 @@ alias_import(char *file)
 				continue;
 
 			if (is_internal_c(alias_name)) {
-				fprintf(stderr, _("%s: Alias conflicts with "
-						"internal command\n"), alias_name);
+				fprintf(stderr, _("%s: Alias conflicts with internal command\n"), alias_name);
 				free(alias_name);
 				continue;
 			}
@@ -871,7 +906,6 @@ alias_import(char *file)
 			*(tmp - 1) = '\0';
 			/* If alias already exists, skip it too */
 			int exists = 0;
-
 			for (i = 0; i < aliases_n; i++) {
 				if (*p == *aliases[i].name && strcmp(aliases[i].name, p) == 0) {
 					exists = 1;
@@ -881,8 +915,8 @@ alias_import(char *file)
 
 			*(tmp - 1) = '=';
 
-			if (!exists) {
-				if (first) {
+			if (exists == 0) {
+				if (first == 1) {
 					first = 0;
 					fputs("\n\n", config_fp);
 				}
@@ -906,8 +940,7 @@ alias_import(char *file)
 
 	/* No alias was found in FILE */
 	if (alias_found == 0) {
-		fprintf(stderr, _("%s: %s: No alias found\n"), PROGRAM_NAME,
-		    rfile);
+		fprintf(stderr, _("%s: %s: No alias found\n"), PROGRAM_NAME, rfile);
 		return EXIT_FAILURE;
 	}
 
@@ -951,14 +984,15 @@ alias_import(char *file)
 void
 save_last_path(void)
 {
-	if (!config_ok || !config_dir || !config_dir_gral) return;
+	if (config_ok == 0 || !config_dir || !config_dir_gral) return;
 
 	char *last_dir = (char *)xnmalloc(config_dir_len + 7, sizeof(char));
 	sprintf(last_dir, "%s/.last", config_dir);
 
 	FILE *last_fp = fopen(last_dir, "w");
 	if (!last_fp) {
-		fprintf(stderr, _("%s: Error saving last visited directory\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Error saving last visited directory: %s\n"),
+			PROGRAM_NAME, strerror(errno));
 		free(last_dir);
 		return;
 	}
@@ -981,7 +1015,7 @@ save_last_path(void)
 		char *cmd[] = {"cp", "-p", last_dir, last_dir_tmp, NULL};
 		launch_execve(cmd, FOREGROUND, E_NOFLAG);
 	} else { /* If not cd on quit, remove the file */
-		char *cmd[] = {"rm", "-f", last_dir_tmp, NULL};
+		char *cmd[] = {"rm", "-f", "--", last_dir_tmp, NULL};
 		launch_execve(cmd, FOREGROUND, E_NOFLAG);
 	}
 
@@ -1041,8 +1075,7 @@ create_usr_var(char *str)
 
 	if (!value) {
 		free(name);
-		fprintf(stderr, _("%s: Error getting variable value\n"),
-		    PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Error getting variable value\n"), PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
 
@@ -1059,43 +1092,20 @@ create_usr_var(char *str)
 	return EXIT_SUCCESS;
 }
 
-/* Set STR as the program current shell */
-/*int
-set_shell(char *str)
+void
+free_autocmds(void)
 {
-	if (!str || !*str)
-		return EXIT_FAILURE;
-
-	// IF no slash in STR, check PATH env variable for a file named STR
-	// and get its full path
-	char *full_path = (char *)NULL;
-
-	if (strcntchr(str, '/') == -1)
-		full_path = get_cmd_path(str);
-
-	char *tmp = (char *)NULL;
-
-	if (full_path)
-		tmp = full_path;
-	else
-		tmp = str;
-
-	if (access(tmp, X_OK) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, tmp, strerror(errno));
-		return EXIT_FAILURE;
+	int i = (int)autocmds_n;
+	while (--i >= 0) {
+		free(autocmds[i].pattern);
+		free(autocmds[i].cmd);
+		autocmds[i].color_scheme = (char *)NULL;
 	}
-
-	if (user.shell)
-		free(user.shell);
-
-	user.shell = savestring(tmp, strlen(tmp));
-	printf(_("Successfully set '%s' as %s default shell\n"), user.shell,
-	    PROGRAM_NAME);
-
-	if (full_path)
-		free(full_path);
-	return EXIT_SUCCESS;
-} */
+	free(autocmds);
+	autocmds = (struct autocmds_t *)NULL;
+	autocmds_n = 0;
+	autocmd_set = 0;
+}
 
 void
 free_tags(void)
@@ -1140,8 +1150,7 @@ expand_prompt_name(char *name)
 
 	int i = (int)prompts_n;
 	while (--i >= 0) {
-		if (*p != *prompts[i].name
-		|| strcmp(p, prompts[i].name) != 0)
+		if (*p != *prompts[i].name || strcmp(p, prompts[i].name) != 0)
 			continue;
 		if (prompts[i].regular) {
 			free(encoded_prompt);
@@ -1151,6 +1160,8 @@ expand_prompt_name(char *name)
 			free(wprompt_str);
 			wprompt_str = savestring(prompts[i].warning, strlen(prompts[i].warning));
 		}
+		prompt_notif = prompts[i].notifications;
+		warning_prompt = prompts[i].warning_prompt_enabled;
 
 		xstrsncpy(cur_prompt_name, prompts[i].name, sizeof(cur_prompt_name));
 		return EXIT_SUCCESS;
@@ -1172,6 +1183,51 @@ free_prompts(void)
 	prompts = (struct prompts_t *)NULL;
 	prompts_n = 0;
 }
+
+static void
+remove_virtual_dir(void)
+{
+	struct stat a;
+	if (stdin_tmp_dir && stat(stdin_tmp_dir, &a) != -1) {
+		xchmod(stdin_tmp_dir, "0700");
+
+		char *rm_cmd[] = {"rm", "-r", "--", stdin_tmp_dir, NULL};
+		int ret = launch_execve(rm_cmd, FOREGROUND, E_NOFLAG);
+		if (ret != EXIT_SUCCESS)
+			exit_code = ret;
+		free(stdin_tmp_dir);
+	}
+	unsetenv("CLIFM_VIRTUAL_DIR");
+}
+
+/*
+#if defined(__clang__)
+// Free the storage associated with MAP
+static void
+xrl_discard_keymap(Keymap map)
+{
+	if (map == 0)
+		return;
+
+	int i;
+	for (i = 0; i < KEYMAP_SIZE; i++) {
+		switch (map[i].type) {
+		case ISFUNC: break;
+
+		case ISKMAP:
+			// GCC (but not clang) complains about this if compiled with -pedantic
+			// See discussion here: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=83584
+			xrl_discard_keymap((Keymap)map[i].function);
+			break;
+
+		case ISMACR:
+			// GCC (not clang) complains about this one too
+			free((char *)map[i].function);
+			break;
+		}
+	}
+}
+#endif // __clang__ */
 
 /* This function is called by atexit() to clear whatever is there at exit
  * time and avoid thus memory leaks */
@@ -1195,16 +1251,8 @@ free_stuff(void)
 
 	free_prompts();
 	free(prompts_file);
-
-	i = (int)autocmds_n;
-	while (--i >= 0) {
-		free(autocmds[i].pattern);
-		free(autocmds[i].cmd);
-	}
-	free(autocmds);
-
+	free_autocmds();
 	free_tags();
-
 	free_remotes(1);
 
 	if (xargs.stealth_mode != 1)
@@ -1224,11 +1272,7 @@ free_stuff(void)
 	free(wprompt_str);
 	free(fzftab_options);
 
-	if (stdin_tmp_dir) {
-		char *rm_cmd[] = {"rm", "-rd", "--", stdin_tmp_dir, NULL};
-		launch_execve(rm_cmd, FOREGROUND, E_NOFLAG);
-		free(stdin_tmp_dir);
-	}
+	remove_virtual_dir();
 
 	i = (int)cschemes_n;
 	while (i-- > 0)
@@ -1292,7 +1336,7 @@ free_stuff(void)
 	if (history) {
 		i = (int)current_hist_n;
 		while (--i >= 0)
-			free(history[i]);
+			free(history[i].cmd);
 		free(history);
 	}
 
@@ -1359,9 +1403,12 @@ free_stuff(void)
 
 	if (workspaces && workspaces[0].path) {
 		i = MAX_WS;
-		while (--i >= 0)
+		while (--i >= 0) {
 			if (workspaces[i].path)
 				free(workspaces[i].path);
+			if (workspaces[i].name)
+				free(workspaces[i].name);
+		}
 		free(workspaces);
 	}
 
@@ -1377,7 +1424,6 @@ free_stuff(void)
 	free(kbinds_file);
 	free(log_file);
 	free(mime_file);
-	free(msg_log_file);
 	free(plugins_dir);
 	free(profile_file);
 	free(remotes_file);
@@ -1398,9 +1444,20 @@ free_stuff(void)
 	free(trash_info_dir);
 #endif
 	free(tags_dir);
+	free(term);
+	free(quote_chars);
+	rl_clear_history();
+//	rl_clear_visible_line();
+
+/*
+#if defined(__clang__)
+	Keymap km = rl_get_keymap();
+	xrl_discard_keymap(km);
+#endif // __clang__ */
 
 	/* Restore the color of the running terminal */
-	fputs("\x1b[0;39;49m", stdout);
+	if (colorize == 1 && xargs.list_and_quit != 1)
+		fputs("\x1b[0;39;49m", stdout);
 }
 
 /* Get current terminal dimensions and store them in TERM_COLS and
@@ -1413,90 +1470,6 @@ get_term_size(void)
 	term_cols = w.ws_col;
 	term_rows = w.ws_row;
 }
-/*
-static int
-set_alt_screen_buf(void)
-{
-	puts("\x1b[?1047h");
-	return 1;
-}
-
-static int
-unset_alt_screen_buf(void)
-{
-	printf("\x1b[?1047l");
-	return 0;
-}
-
-void
-refresh_files_list(void)
-{
-	static int state = 0;
-	if (term_cols < MIN_SCREEN_WIDTH || term_rows < MIN_SCREEN_HEIGHT) {
-		if (state == 0)
-			state = set_alt_screen_buf();
-		CLEAR;
-		puts("\x1b[H");
-		printf(_("%s: Minimum screen size is %dx%d\n"), PROGRAM_NAME,
-			MIN_SCREEN_WIDTH, MIN_SCREEN_HEIGHT);
-		return;
-	}
-
-	if (state == 1)
-		state = unset_alt_screen_buf();
-
-	if (autols) {
-		if (flags & RELOADING_BINARIES) {
-			char p[PATH_MAX];
-			*p = '\0';
-			getcwd(p, PATH_MAX);
-			if (*workspaces[cur_ws].path != *p
-			|| strcmp(p, workspaces[cur_ws].path) != 0)
-				chdir(workspaces[cur_ws].path);
-		}
-		write(STDOUT_FILENO, "\n", 1);
-		reload_dirlist();
-	}
-
-	if (flags & RUNNING_CMD_FG) {
-		write(STDOUT_FILENO, " ...\x1b[4D", 8);
-		fflush(stdout);
-		return;
-	}
-
-//	if (!(flags & RUNNING_SHELL_CMD) || bg_proc == 1)
-	if ((!(flags & RUNNING_SHELL_CMD) && bg_proc == 0) || bg_proc == 1)
-		rl_reset_line_state();
-	if (bg_proc == 1 || !(flags & RUNNING_CMD_FG))
-		rl_redisplay();
-} */
-
-/* BE READY FOR THE UGLIEST WORKAROUND EVER!
- * This code is aimed to check whether some terminal program has taken
- * control over our screen. How it does this? Immediately before running
- * commands (launch_exec functions) we store the current cursor position.
- * Then, upon SIGWINCH, we check this position again: if not the same,
- * some external program is controlling the screen, in which case we
- * should not attempt to refresh the files list. Instead, set a flag to
- * refresh the screen only after the currently controlliong program exits.
- * This thing basically works, but is still BAD, BAD, BAD.
- * The get_cursor_position function calls isatty(3) and sscanf(3), which
- * are not async-signal-safe functions and should not thereby be called
- * from a signal handler. See signal-safety(7) */
-/*static int
-screen_is_ours(void)
-{
-	int c = 0, r = 0;
-	write(STDOUT_FILENO, "\x1b[?1047l", 8);
-	get_cursor_position(STDIN_FILENO, STDOUT_FILENO, &c, &r);
-	if (c != curcol || r != currow) {
-		write(STDOUT_FILENO, "\x1b[?1047h", 8);
-		flags |= DELAYED_REFRESH;
-		return 0;
-	}
-
-	return 1;
-} */
 
 /* Get new window size and update/refresh the screen accordingly */
 static void
@@ -1507,38 +1480,8 @@ sigwinch_handler(int sig)
 		return;
 
 	get_term_size();
-
-/*	if (bg_proc == 0 && screen_is_ours() == 0)
-		return; */
-
-//	if ((!(flags & RUNNING_SHELL_CMD) && bg_proc == 0) || bg_proc == 1) {
-//		return;
-/*		reload_dirlist();
-		rl_reset_line_state();
-		rl_redisplay(); */
-//	} else {
 	flags |= DELAYED_REFRESH;
-//	}
-/*	if (bg_proc == 1 || !(flags & RUNNING_CMD_FG)) {
-		reload_dirlist();
-		rl_reset_line_state();
-		rl_redisplay();
-	} else {
-		flags |= DELAYED_REFRESH;
-	} */
-	/* THIS SHOULDN'T BE CALLED FROM HERE: THE WHOLE THING IS NOT ASYNC-SIGNAL-SAFE! */
-//	refresh_files_list();
 }
-/*
-static void
-sigusr_handler(int sig)
-{
-	if (sig == SIGUSR1)
-		puts("This is the second biggest signal I've ever seen!");
-	else
-		puts("The signals are very strong tonight");
-	fflush(stdout);
-} */
 
 void
 set_signals_to_ignore(void)
@@ -1551,12 +1494,43 @@ set_signals_to_ignore(void)
 	signal(SIGUSR2, sigusr_handler); */
 }
 
-void
-handle_stdin()
+static int
+create_virtual_dir(const int user_provided)
+{
+	if (!stdin_tmp_dir || !*stdin_tmp_dir) {
+		if (user_provided == 1) {
+			_err('e', PRINT_PROMPT, "%s: Empty buffer for virtual "
+				"directory name. Trying with default value\n", PROGRAM_NAME);
+		} else {
+			_err('e', PRINT_PROMPT, "%s: Empty buffer for virtual "
+				"directory name\n", PROGRAM_NAME);
+		}
+		return EXIT_FAILURE;
+	}
+
+	char *cmd[] = {"mkdir", "-p", "--", stdin_tmp_dir, NULL};
+	int ret = 0;
+	if ((ret = launch_execve(cmd, FOREGROUND, E_MUTE)) != EXIT_SUCCESS) {
+		if (user_provided == 1) {
+			_err('e', PRINT_PROMPT, "%s: mkdir: %s: %s. Trying with default value\n",
+				PROGRAM_NAME, stdin_tmp_dir, strerror(ret));
+		} else {
+			_err('e', PRINT_PROMPT, "%s: mkdir: %s: %s\n",
+				PROGRAM_NAME, stdin_tmp_dir, strerror(ret));
+		}
+		return ret;
+	}
+
+	return EXIT_SUCCESS;
+}
+
+int
+handle_stdin(void)
 {
 	/* If files are passed via stdin, we need to disable restore
 	 * last path in order to correctly understand relative paths */
 	restore_last_path = 0;
+	int exit_status = EXIT_SUCCESS;
 
 	/* Max input size: 512 * (512 * 1024)
 	 * 512 chunks of 524288 bytes (512KiB) each
@@ -1579,7 +1553,7 @@ handle_stdin()
 		/* Error */
 		if (input_len < 0) {
 			free(buf);
-			return;
+			return EXIT_FAILURE;
 		}
 
 		/* Nothing else to be read */
@@ -1600,49 +1574,74 @@ handle_stdin()
 	buf[total_len] = '\0';
 
 	/* Create tmp dir to store links to files */
-	char *rand_ext = gen_rand_str(6);
-	if (!rand_ext)
-		goto FREE_N_EXIT;
+	char *suffix = (char *)NULL;
 
-	if (tmp_dir) {
-		stdin_tmp_dir = (char *)xnmalloc(strlen(tmp_dir) + 14, sizeof(char));
-		sprintf(stdin_tmp_dir, "%s/.clifm%s", tmp_dir, rand_ext);
-	} else {
-		stdin_tmp_dir = (char *)xnmalloc(P_tmpdir_len + 14, sizeof(char));
-		sprintf(stdin_tmp_dir, "%s/.clifm%s", P_tmpdir, rand_ext);
+	if (!stdin_tmp_dir || (exit_status = create_virtual_dir(1)) != EXIT_SUCCESS) {
+		free(stdin_tmp_dir);
+
+		suffix = gen_rand_str(6);
+		char *temp = tmp_dir ? tmp_dir : P_tmpdir;
+		stdin_tmp_dir = (char *)xnmalloc(strlen(temp) + 13, sizeof(char));
+		sprintf(stdin_tmp_dir, "%s/vdir.%s", temp, suffix ? suffix : "nTmp0B");
+		free(suffix);
+
+		if ((exit_status = create_virtual_dir(0)) != EXIT_SUCCESS)
+			goto FREE_N_EXIT;
 	}
 
-	free(rand_ext);
-
-	char *cmd[] = {"mkdir", "-p", stdin_tmp_dir, NULL};
-	if (launch_execve(cmd, FOREGROUND, E_NOFLAG) != EXIT_SUCCESS)
-		goto FREE_N_EXIT;
+	if (xargs.stealth_mode != 1)
+		setenv("CLIFM_VIRTUAL_DIR", stdin_tmp_dir, 1);
 
 	/* Get CWD: we need it to prepend it to relative paths */
 	char *cwd = (char *)NULL;
 	cwd = getcwd(NULL, 0);
-	if (!cwd)
+	if (!cwd) {
+		exit_status = errno;
 		goto FREE_N_EXIT;
+	}
 
 	/* Get substrings from buf */
 	char *p = buf, *q = buf;
+	size_t links_counter = 0;
 
 	while (*p) {
 		if (!*p || *p == '\n') {
 			*p = '\0';
 
-			/* Create symlinks (in tmp dir) to each valid file in
-			 * the buffer */
+			/* Create symlinks (in tmp dir) to each valid file in the buffer */
+			if (SELFORPARENT(q))
+				goto END;
 
-			/* If file does not exist */
 			struct stat attr;
-			if (lstat(q, &attr) == -1)
-				continue;
+			if (lstat(q, &attr) == -1) {
+				_err('w', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, q, strerror(errno));
+				goto END;
+			}
 
 			/* Construct source and destiny files */
-			char *tmp_file = strrchr(q, '/');
-			if (!tmp_file || !*(++tmp_file))
-				tmp_file = q;
+
+			/* symlink(3) doesn't like file names ending with slash */
+			size_t slen = strlen(q);
+			if (slen > 1 && q[slen - 1] == '/')
+				q[slen - 1] = '\0';
+
+			/* Should we construct destiny file as full path or using only the
+			 * last path component (the file's basename)? */
+			char *tmp_file = (char *)NULL;
+			int free_tmp_file = 0;
+			if (xargs.virtual_dir_full_paths != 1) {
+				tmp_file = strrchr(q, '/');
+				if (!tmp_file || !*(++tmp_file))
+					tmp_file = q;
+			} else {
+				tmp_file = replace_slashes(q, ':');
+				if (!tmp_file) {
+					_err('w', PRINT_PROMPT, "%s: %s: Error formatting file name\n",
+						PROGRAM_NAME, q);
+					goto END;
+				}
+				free_tmp_file = 1;
+			}
 
 			char source[PATH_MAX];
 			if (*q != '/' || !q[1])
@@ -1653,22 +1652,61 @@ handle_stdin()
 			char dest[PATH_MAX + 1];
 			snprintf(dest, PATH_MAX, "%s/%s", stdin_tmp_dir, tmp_file);
 
-			if (symlink(source, dest) == -1)
-				_err('w', PRINT_PROMPT, "ln: '%s': %s\n", q, strerror(errno));
+			if (symlink(source, dest) == -1) {
+				if (errno == EEXIST && xargs.virtual_dir_full_paths != 1) {
+					/* File already exists: append a random six digits suffix */
+					suffix = gen_rand_str(6);
+					char tmp[PATH_MAX + 8];
+					snprintf(tmp, sizeof(tmp), "%s.%s", dest, suffix ? suffix : "#dn7R4");
+					if (symlink(source, tmp) == -1)
+						_err('w', PRINT_PROMPT, "symlink: %s: %s\n", q, strerror(errno));
+					else
+						_err('w', PRINT_PROMPT, "symlink: %s: Destiny exists. Created "
+							"as %s\n", q, tmp);
+					free(suffix);
+				} else {
+					_err('w', PRINT_PROMPT, "symlink: %s: %s\n", q, strerror(errno));
+				}
+			} else {
+				links_counter++;
+			}
 
+			if (free_tmp_file == 1)
+				free(tmp_file);
+
+END:
 			q = p + 1;
 		}
 
 		p++;
 	}
 
+	if (links_counter == 0) { /* No symlink was created. Exit */
+		dup2(STDOUT_FILENO, STDIN_FILENO);
+		_err(0, NOPRINT_PROMPT, "%s: Empty file names buffer. Nothing to do\n", PROGRAM_NAME);
+		if (getenv("CLIFM_VT_RUNNING")) {
+			fprintf(stderr, "Press any key to continue... ");
+			xgetchar();
+		}
+		free(cwd);
+		free(buf);
+		exit(EXIT_FAILURE);
+	}
+
+	/* Make the virtual dir read only */
+	xchmod(stdin_tmp_dir, "0500");
+
 	/* chdir to tmp dir and update path var */
 	if (xchdir(stdin_tmp_dir, SET_TITLE) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, stdin_tmp_dir,
-		    strerror(errno));
+		exit_status = errno;
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "cd: %s: %s\n", stdin_tmp_dir, strerror(errno));
 
-		char *rm_cmd[] = {"rm", "-drf", stdin_tmp_dir, NULL};
-		launch_execve(rm_cmd, FOREGROUND, E_NOFLAG);
+		xchmod(stdin_tmp_dir, "0700");
+
+		char *rm_cmd[] = {"rm", "-r", "--", stdin_tmp_dir, NULL};
+		int ret = launch_execve(rm_cmd, FOREGROUND, E_NOFLAG);
+		if (ret != EXIT_SUCCESS)
+			exit_status = ret;
 
 		free(cwd);
 		goto FREE_N_EXIT;
@@ -1693,14 +1731,14 @@ FREE_N_EXIT:
 		add_to_dirhist(workspaces[cur_ws].path);
 	}
 
-	return;
+	return exit_status;
 }
 
 /* Save pinned in a file */
 static int
 save_pinned_dir(void)
 {
-	if (!pinned_dir || !config_ok)
+	if (!pinned_dir || config_ok == 0)
 		return EXIT_FAILURE;
 
 	char *pin_file = (char *)xnmalloc(config_dir_len + 7, sizeof(char));
@@ -1708,7 +1746,8 @@ save_pinned_dir(void)
 
 	FILE *fp = fopen(pin_file, "w");
 	if (!fp) {
-		fprintf(stderr, _("%s: Error storing pinned directory\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Error storing pinned directory: %s\n"),
+			PROGRAM_NAME, strerror(errno));
 	} else {
 		fprintf(fp, "%s", pinned_dir);
 		fclose(fp);
@@ -1722,19 +1761,16 @@ save_pinned_dir(void)
 int
 pin_directory(char *dir)
 {
-	if (!dir || !*dir)
-		return EXIT_FAILURE;
+	if (!dir || !*dir) return EXIT_FAILURE;
 
 	struct stat attr;
 	if (lstat(dir, &attr) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, dir, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, dir, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
-	if (pinned_dir) {
-		free(pinned_dir);
-		pinned_dir = (char *)NULL;
-	}
+	if (pinned_dir)
+		{free(pinned_dir); pinned_dir = (char *)NULL;}
 
 	/* If absolute path */
 	if (*dir == '/') {
@@ -1775,13 +1811,13 @@ unpin_dir(void)
 		char *pin_file = (char *)xnmalloc(config_dir_len + 7, sizeof(char));
 		sprintf(pin_file, "%s/.pin", config_dir);
 		if (unlink(pin_file) == -1) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, pin_file,
-			    strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+				pin_file, strerror(errno));
 			cmd_error = 1;
 		}
 
 		free(pin_file);
-		if (cmd_error)
+		if (cmd_error == 1)
 			return EXIT_FAILURE;
 	}
 
@@ -1806,13 +1842,13 @@ list_commands(void)
 	return EXIT_SUCCESS;
 }
 
+#if !defined(__HAIKU__)
 /* Retrieve pager path, first from PAGER, then try less(1), and finally
  * more(1). If none is found returns NULL */
 static char *
 get_pager(void)
 {
 	char *_pager = (char *)NULL;
-
 	char *p = getenv("PAGER");
 	if (p)
 		_pager = savestring(p, strlen(p));
@@ -1832,32 +1868,202 @@ get_pager(void)
 
 	return _pager;
 }
+#endif /* !__HAIKU__ */
+
+/* Help topics */
+static void
+print_more_info(void)
+{
+	puts(_("For more information consult the manpage and/or the Wiki (https://github.com/leo-arch/clifm/wiki)"));
+}
+
+static int
+print_archives_topic(void)
+{
+	puts(ARCHIVE_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_autocmds_topic(void)
+{
+	puts(AUTOCMDS_USAGE);
+	putchar('\n');
+	print_more_info();
+	return EXIT_SUCCESS;
+}
+
+static int
+print_basics_topic(void)
+{
+	puts(_("Run '?' and consult the BASIC FILE OPERATIONS section"));
+	return EXIT_SUCCESS;
+}
+
+static int
+print_bookmarks_topic(void)
+{
+	puts(BOOKMARKS_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_desktop_notifications_topic(void)
+{
+	puts(DESKTOP_NOTIFICATIONS_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_dir_jumper_topic(void)
+{
+	puts(JUMP_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_file_tags_topic(void)
+{
+	puts(TAG_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_file_attributes_topic(void)
+{
+	puts(FILE_DETAILS);
+	putchar('\n');
+	puts(FILE_SIZE_USAGE);
+	putchar('\n');
+	puts(FILTER_USAGE);
+	return EXIT_SUCCESS;
+}
+
+static int
+print_navigation_topic(void)
+{
+	puts(_("Run '?' and consult the NAVIGATION section"));
+	return EXIT_SUCCESS;
+}
+
+static int
+print_plugins_topic(void)
+{
+	puts(ACTIONS_USAGE);
+	putchar('\n');
+	print_more_info();
+	return EXIT_SUCCESS;
+}
+
+static int
+print_profiles_topic(void)
+{
+	puts(PROFILES_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_remotes_topic(void)
+{
+	puts(NET_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_resource_opener_topic(void)
+{
+	puts(MIME_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_selection_topic(void)
+{
+	puts(SEL_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_search_topic(void)
+{
+	puts(SEARCH_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+print_theming_topic(void)
+{
+	puts(_("Take a look at the colorscheme, prompt, and edit commands"));
+	print_more_info();
+	return EXIT_SUCCESS;
+}
+
+static int
+print_trash_topic(void)
+{
+	puts(TRASH_USAGE); return EXIT_SUCCESS;
+}
+
+static int
+run_help_topic(char *topic)
+{
+	if (*topic == 'a' && strcmp(topic, "archives") == 0)
+		return print_archives_topic();
+	if (*topic == 'a' && strcmp(topic, "autocommands") == 0)
+		return print_autocmds_topic();
+	if (*topic == 'b' && strcmp(topic, "basics") == 0)
+		return print_basics_topic();
+	if (*topic == 'b' && strcmp(topic, "bookmarks") == 0)
+		return print_bookmarks_topic();
+	if (*topic == 'd' && strcmp(topic, "desktop-notifications") == 0)
+		return print_desktop_notifications_topic();
+	if (*topic == 'd' && strcmp(topic, "dir-jumper") == 0)
+		return print_dir_jumper_topic();
+	if (*topic == 'f' && strcmp(topic, "file-details") == 0)
+		return print_file_attributes_topic();
+	if (*topic == 'f' && strcmp(topic, "file-tags") == 0)
+		return print_file_tags_topic();
+	if (*topic == 'n' && strcmp(topic, "navigation") == 0)
+		return print_navigation_topic();
+	if (*topic == 'p' && strcmp(topic, "plugins") == 0)
+		return print_plugins_topic();
+	if (*topic == 'p' && strcmp(topic, "profiles") == 0)
+		return print_profiles_topic();
+	if (*topic == 'r' && strcmp(topic, "remotes") == 0)
+		return print_remotes_topic();
+	if (*topic == 'r' && strcmp(topic, "resource-opener") == 0)
+		return print_resource_opener_topic();
+	if (*topic == 's' && strcmp(topic, "selection") == 0)
+		return print_selection_topic();
+	if (*topic == 's' && strcmp(topic, "search") == 0)
+		return print_search_topic();
+	if (*topic == 't' && strcmp(topic, "theming") == 0)
+		return print_theming_topic();
+	if (*topic == 't' && strcmp(topic, "trash") == 0)
+		return print_trash_topic();
+
+	fprintf(stderr, "%s: help: %s: No such help topic\n", PROGRAM_NAME, topic);
+	return EXIT_FAILURE;
+}
 
 int
-quick_help(void)
+quick_help(char *topic)
 {
+	if (topic && *topic)
+		return run_help_topic(topic);
+
 #ifdef __HAIKU__
 	printf("%s                                %s\n\n%s",
-		ASCII_LOGO, PROGRAM_NAME, QUICK_HELP);
+		ASCII_LOGO, _PROGRAM_NAME, QUICK_HELP);
 	puts(_("\nNOTE: Some keybindings on Haiku might differ. Take a look "
 		"at your current keybindings via the 'kb' command"));
 	return EXIT_SUCCESS;
 #else
-	char *_pager = get_pager();
-	if (!_pager) {
-		fprintf(stderr, _("%s: Unable to find any pager\n"), PROGRAM_NAME);
-		return EXIT_FAILURE;
+	char *_pager = (char *)NULL;
+	if (xargs.stealth_mode == 1 || !(_pager = get_pager())) {
+		printf("%s                                %s\n\n%s",
+			ASCII_LOGO, _PROGRAM_NAME, QUICK_HELP);
+		return EXIT_SUCCESS;
 	}
 
 	char tmp_file[PATH_MAX];
-	if (xargs.stealth_mode == 1)
-		snprintf(tmp_file, PATH_MAX - 1, "%s/%s", P_tmpdir, TMP_FILENAME);
-	else
-		snprintf(tmp_file, PATH_MAX - 1, "%s/%s", tmp_dir, TMP_FILENAME);
+	snprintf(tmp_file, PATH_MAX - 1, "%s/%s", xargs.stealth_mode == 1
+		? P_tmpdir : tmp_dir, TMP_FILENAME);
 
 	int fd = mkstemp(tmp_file);
 	if (fd == -1) {
-		fprintf(stderr, "%s: Error creating temporary file\n", PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: Error creating temporary file: %s\n",
+			PROGRAM_NAME, tmp_file, strerror(errno));
 		free(_pager);
 		return EXIT_FAILURE;
 	}
@@ -1865,13 +2071,14 @@ quick_help(void)
 	FILE *fp;
 	fp = open_fstream_w(tmp_file, &fd);
 	if (!fp) {
-		fprintf(stderr, "%s: fopen: %s: %s\n", PROGRAM_NAME, tmp_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: fopen: %s: %s\n", PROGRAM_NAME,
+			tmp_file, strerror(errno));
 		free(_pager);
 		return EXIT_FAILURE;
 	}
 
 	dprintf(fd, "%s                                %s\n\n%s",
-			ASCII_LOGO, PROGRAM_NAME, QUICK_HELP);
+			ASCII_LOGO, _PROGRAM_NAME, QUICK_HELP);
 
 	int ret;
 	if (*_pager == 'l' && strcmp(_pager, "less") == 0) {
@@ -1887,7 +2094,7 @@ quick_help(void)
 	free(_pager);
 
 	if (ret != EXIT_SUCCESS)
-		return EXIT_FAILURE;
+		return ret;
 
 	if (autols == 1)
 		reload_dirlist();
@@ -1899,13 +2106,9 @@ void
 help_function(void)
 {
 	fputs(NC, stdout);
-
 	printf("%s\n", ASCII_LOGO);
-
 	printf(_("%s %s (%s), by %s\n"), PROGRAM_NAME, VERSION, DATE, AUTHOR);
-
-	printf("\nUSAGE: %s %s\n%s%s", PNL, GRAL_USAGE, _(SHORT_OPTIONS),
-			_(LONG_OPTIONS));
+	printf("\nUSAGE: %s %s\n%s%s", PNL, GRAL_USAGE, _(SHORT_OPTIONS), _(LONG_OPTIONS));
 
 	puts(_(CLIFM_COMMANDS));
 	puts(_(CLIFM_KEYBOARD_SHORTCUTS));
@@ -1930,7 +2133,7 @@ splash(void)
 {
 	printf("\n%s%s\n\n%s%s\t\t       %s%s\n           %s\n",
 		colorize ? D_CYAN : "", ASCII_LOGO_BIG, df_c,
-		BOLD, df_c, PROGRAM_NAME, _(PROGRAM_DESC));
+		BOLD, df_c, _PROGRAM_NAME, _(PROGRAM_DESC));
 
 	if (splash_screen) {
 		printf(_("\n            Press any key to continue... "));

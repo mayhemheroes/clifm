@@ -97,17 +97,18 @@
 #include "messages.h"
 #include "settings.h"
 
-#define PROGRAM_NAME "CliFM"
+#define _PROGRAM_NAME "CliFM"
+#define PROGRAM_NAME "clifm"
 #define PNL "clifm" /* Program name lowercase */
 #define PROGRAM_DESC "The command line file manager"
-#define VERSION "1.6-Guybrush"
+#define VERSION "1.6.1"
 #define AUTHOR "L. Abramovich"
 #define CONTACT "https://github.com/leo-arch/clifm"
-#define DATE "May 8, 2022"
+#define DATE "Jul 11, 2022"
 #define LICENSE "GPL2+"
 #define COLORS_REPO "https://github.com/leo-arch/clifm-colors"
 
-#if __TINYC__
+#if defined(__TINYC__)
 void *__dso_handle;
 #endif
 
@@ -123,8 +124,12 @@ void *__dso_handle;
 #endif /* PATH_MAX */
 
 #ifndef HOST_NAME_MAX
-# define HOST_NAME_MAX 64
-#endif
+# if defined(__ANDROID__)
+#  define HOST_NAME_MAX 255
+# else
+#  define HOST_NAME_MAX 64
+# endif /* __ANDROID__ */
+#endif /* !HOST_NAME_MAX */
 
 #ifndef NAME_MAX
 # define NAME_MAX 255
@@ -172,28 +177,41 @@ extern struct timespec timeout;
 #endif /* LINUX_INOTIFY */
 extern int watch;
 
+/* The following flags are used via an integer (FLAGS). If an integer has
+ * 4 bytes, then we can use a total of 32 flags (0-31)
+ * 4 * 8 == 32 bits == (1 << 31)
+ * NOTE: setting (1 << 31) gives a negative value: DON'T USE
+ * NOTE 2: What if int size isn't 4 bytes or more, but 2 (16 bits)? In this
+ * case, if we want to support old 16 bit machines, we shouldn't use more than
+ * 16 bits per flag, that is (1 << 15) */
+
 /* Options flags */
-#define FOLDERS_FIRST (1 << 1)
-#define HELP          (1 << 2)
-#define HIDDEN        (1 << 3)
-#define AUTOLS        (1 << 4)
-#define SPLASH        (1 << 5)
-#define CASE_SENS     (1 << 6)
-#define START_PATH    (1 << 7)
-#define ALT_PROFILE   (1 << 8)
+#define START_PATH    (1 << 0)
+#define ALT_PROFILE   (1 << 1)
 
 /* Internal flags */
-#define ROOT_USR      (1 << 9)
-#define GUI           (1 << 10)
-#define IS_USRVAR_DEF (1 << 11)
-#define FZF_BIN_OK    (1 << 12)
+#define ROOT_USR      (1 << 2)
+#define GUI           (1 << 3)
+#define IS_USRVAR_DEF (1 << 4)
 
 /* Used by the refresh on resize feature */
-#define DELAYED_REFRESH    (1 << 13)
-#define PATH_PROGRAMS_ALREADY_LOADED (1 << 14)
+#define DELAYED_REFRESH    (1 << 5)
+#define PATH_PROGRAMS_ALREADY_LOADED (1 << 6)
 
-#define FIRST_WORD_IS_ELN   (1 << 15)
-#define IN_BOOKMARKS_SCREEN (1 << 16)
+#define FIRST_WORD_IS_ELN   (1 << 7)
+#define IN_BOOKMARKS_SCREEN (1 << 8)
+#define STATE_COMPLETING    (1 << 9)
+/* Instead of a completion for the current word, a BAEJ suggestion points to
+ * a possible completion as follows: WORD > COMPLETION */
+#define BAEJ_SUGGESTION     (1 << 10)
+#define STATE_SUGGESTING    (1 << 11)
+#define IN_SELBOX_SCREEN    (1 << 12)
+#define MULTI_SEL           (1 << 13)
+
+/* Flags for finder binaries */
+#define FZF_BIN_OK    (1 << 0)
+#define FZY_BIN_OK    (1 << 1)
+#define SMENU_BIN_OK  (1 << 2)
 
 /* File ownership flags (used by check_file_access() in checks.c) */
 #define R_USR (1 << 1)
@@ -203,9 +221,23 @@ extern int watch;
 #define R_OTH (1 << 5)
 #define X_OTH (1 << 6)
 
+/* Flag to control the search function behavior */
+#define NO_GLOB_CHAR (1 << 0)
+/* Search strategy */
+#define GLOB_ONLY  0
+#define REGEX_ONLY 1
+#define GLOB_REGEX 2
+
+#define GLOB_CHARS "*?[{"
+#define GLOB_REGEX_CHARS "*?[{|^+$."
+
 /* Used by log_msg() to know wether to tell prompt() to print messages or not */
 #define PRINT_PROMPT   1
 #define NOPRINT_PROMPT 0
+
+/* A few macros for the _err function */
+#define ERR_NO_LOG   -1 /* _err prints but doesn't log */
+#define ERR_NO_STORE -2 /* _err prints and logs, but doesn't store the msg into the messages array */
 
 /* Macros for xchdir (for setting term title or not) */
 #define SET_TITLE 1
@@ -229,7 +261,6 @@ extern int watch;
 #define FOREGROUND 0
 
 /* A few fixed colors */
-#define GRAY    "\x1b[1;30m"
 #define _RED    "\x1b[1;31m"
 #define _GREEN  "\x1b[0;32m"
 #define _BGREEN "\x1b[1;32m"
@@ -322,6 +353,9 @@ extern int watch;
 #define BM_NAME_SUG    18 /* Bookmarks names */
 #define SORT_SUG       19
 #define PROMPT_SUG     20
+#define USER_SUG       21
+#define WS_NUM_SUG     22 /* Workspace number */
+#define WS_NAME_SUG    23 /* Workspace name */
 
 /* 46 == \x1b[00;38;02;000;000;000;00;48;02;000;000;000m\0 (24bit, RGB
  * true color format including foreground and background colors, the SGR
@@ -365,11 +399,18 @@ extern int watch;
 
 #define __MB_LEN_MAX 16
 
-#define TMP_FILENAME ".clifmXXXXXX"
+/* OpenBSD recommends the use of ten trailing X's. See mkstemp(3) */
+#if defined(__OpenBSD__)
+# define TMP_FILENAME ".tempXXXXXXXXXX"
+#else
+# define TMP_FILENAME ".tempXXXXXX"
+#endif /* __OpenBSD__ */
 
 #ifndef P_tmpdir
 # define P_tmpdir "/tmp"
 #endif
+
+#define PROP_FIELDS_SIZE 5 /* Five fields in the properties string (long view) */
 
 /* Dirjump macros for calculating directories rank extra points */
 #define BASENAME_BONUS 	300
@@ -445,8 +486,8 @@ extern int watch;
 
 /* Macros to calculate file sizes */
 #define BLK_SIZE 512
-#define FILE_SIZE_PTR (xargs.apparent_size == 1 ? attr->st_size : attr->st_blocks * BLK_SIZE)
-#define FILE_SIZE (xargs.apparent_size == 1 ? attr.st_size : attr.st_blocks * BLK_SIZE)
+#define FILE_SIZE_PTR (apparent_size == 1 ? attr->st_size : attr->st_blocks * BLK_SIZE)
+#define FILE_SIZE (apparent_size == 1 ? attr.st_size : attr.st_blocks * BLK_SIZE)
 
 #define UNUSED(x) (void)x /* Just silence the compiler's warning */
 #define TOUPPER(ch) (((ch) >= 'a' && (ch) <= 'z') ? ((ch) - 'a' + 'A') : (ch))
@@ -540,6 +581,7 @@ extern struct actions_t *usr_actions;
 /* Workspaces information */
 struct ws_t {
 	char *path;
+	char *name;
 	int num;
 	int pad;
 };
@@ -644,7 +686,7 @@ struct autocmds_t {
 	int sort;
 	int sort_reverse;
 	int pager;
-	int pad;
+	int only_dirs;
 };
 
 extern struct autocmds_t *autocmds;
@@ -660,7 +702,7 @@ struct opts_t {
 	int sort;
 	int sort_reverse;
 	int pager;
-	int pad;
+	int only_dirs;
 };
 
 extern struct opts_t opts;
@@ -670,7 +712,7 @@ extern struct opts_t opts;
  * line parameter will be overriden, the user still can modifiy on the
  * fly (editing the config file) any option not specified in the command
  * line */
-struct param {
+struct param_t {
 	int apparent_size;
 	int auto_open;
 	int autocd;
@@ -685,6 +727,7 @@ struct param {
 	int columns;
 	int config;
 	int cwd_in_title;
+	int desktop_notifications;
 	int dirmap;
 	int disk_usage;
 	int cd_on_quit;
@@ -694,15 +737,18 @@ struct param {
 	int color_scheme;
 	int control_d_exits;
 	int disk_usage_analyzer;
+	int eln_use_workspace_color;
 	int expand_bookmarks;
 	int ext;
-	int ffirst;
+	int dirs_first;
 	int files_counter;
 	int follow_symlinks;
 	int full_dir_size;
+	int fuzzy_match;
 #ifndef _NO_FZF
 	int fzftab;
 	int fzytab;
+	int smenutab;
 #endif
 	int hidden;
 #ifndef _NO_HIGHLIGHT
@@ -730,6 +776,7 @@ struct param {
 	int pager;
 	int path;
 	int printsel;
+	int refresh_on_empty_line;
 	int refresh_on_resize;
 	int restore_last_path;
 	int rl_vi_mode;
@@ -747,15 +794,17 @@ struct param {
 	int suggestions;
 #endif
 	int tips;
+	int toggle_workspaces;
 #ifndef _NO_TRASH
 	int trasrm;
 #endif
 	int unicode;
+	int virtual_dir_full_paths;
 	int welcome_message;
 	int warning_prompt;
 };
 
-extern struct param xargs;
+extern struct param_t xargs;
 
 /* Struct to store remotes information */
 struct remote_t {
@@ -829,6 +878,7 @@ struct prompts_t {
 	char *regular;
 	char *warning;
 	int notifications;
+	int warning_prompt_enabled;
 };
 
 extern struct prompts_t *prompts;
@@ -839,6 +889,46 @@ struct msgs_t {
 	size_t notice;
 };
 extern struct msgs_t msgs;
+
+/* Macros for properties string fields in long view */
+#define PERM_SYMBOLIC 1
+#define PERM_NUMERIC  2
+
+#define PROP_TIME_ACCESS 1
+#define PROP_TIME_MOD    2
+#define PROP_TIME_CHANGE 3
+
+struct props_t {
+	int perm; /* File permissions; either NUMERIC or SYMBOLIC */
+	int ids; /* User and group IDs */
+	int time; /* Time: either ACCESS, MOD, or CHANGE */
+	int size; /* File size */
+	int inode; /* File inode number */
+};
+extern struct props_t prop_fields;
+
+struct cmdslist_t {
+	char *name;
+	size_t len;
+};
+extern const struct cmdslist_t param_str[];
+extern const struct cmdslist_t internal_cmds[];
+extern size_t internal_cmds_n;
+
+struct history_t {
+	char *cmd;
+	size_t len;
+};
+extern struct history_t *history;
+
+enum tab_mode {
+	STD_TAB =   0,
+	FZF_TAB =   1,
+	FZY_TAB =   2,
+	SMENU_TAB = 3
+};
+
+extern enum tab_mode tabmode;
 
 /* A list of possible program messages. Each value tells the prompt what
  * to do with error messages: either to print an E, W, or N char at the
@@ -884,11 +974,17 @@ enum comp_type {
 	TCMP_ENVIRON =    18,
 	TCMP_TAGS_T =     19, /* T keyword: 't:TAG' */
 	TCMP_TAGS_C =     20, /* Colon: 'tag file :TAG' */
-	TCMP_TAGS_S =     21,  /* Simple completion: 'tag rm TAG' */
-	TCMP_TAGS_F =     22,  /* Tagged files completion: 't:FULL_TAG_NAME' */
-	TCMP_TAGS_U =     23,  /* Tagged files for the untag function */
+	TCMP_TAGS_S =     21, /* Simple completion: 'tag rm TAG' */
+	TCMP_TAGS_F =     22, /* Tagged files completion: 't:FULL_TAG_NAME' */
+	TCMP_TAGS_U =     23, /* Tagged files for the untag function */
 	TCMP_ALIAS =      24,
-	TCMP_PROMPTS=     25
+	TCMP_PROMPTS =    25,
+	TCMP_USERS =      26,
+	TCMP_GLOB =       27,
+	TCMP_FILE_TYPES_OPTS = 28,
+	TCMP_FILE_TYPES_FILES = 29,
+	TCMP_WORKSPACES = 30,
+	TCMP_BM_PATHS =   31 /* 'b:' keyword expansion (second word or more) */
 };
 
 extern enum comp_type cur_comp_type;
@@ -898,9 +994,12 @@ extern struct termios orig_termios;
 extern int
 	curcol,
 	currow,
-	flags;
+	flags,
+	finder_flags,
+	search_flags;
 
 extern int
+	apparent_size,
 	auto_open,
 	autocd,
 	autocmd_set,
@@ -925,6 +1024,9 @@ extern int
 	cp_cmd,
 	cur_ws,
 	dequoted,
+
+	desktop_notifications,
+
 	dir_changed, /* flag to know is dir was changed: used by autocmds */
 	dirhist_map,
 	disk_usage,
@@ -951,8 +1053,9 @@ extern int
 	kb_shortcut,
 	kbind_busy,
 	light_mode,
-	list_folders_first,
+	list_dirs_first,
 	listing_mode,
+	log_cmds,
 	logs_enabled,
 	long_view,
 	max_name_len,
@@ -964,8 +1067,10 @@ extern int
 	only_dirs,
 	open_in_foreground, /* Override mimelist file: used by mime_open */
 	pager,
+	prev_ws,
 	print_msg,
 	print_selfiles,
+	print_removed_files,
 	prompt_offset,
 	prompt_notif,
 	recur_perm_error_flag,
@@ -973,6 +1078,7 @@ extern int
 	rl_last_word_start,
 	rl_nohist,
 	rl_notab,
+	search_strategy,
 	sel_is_last,
 	selfile_ok,
 	share_selbox,
@@ -1046,7 +1152,6 @@ extern size_t
 	tab_offset,
 	tags_n,
 	trash_n,
-	user_home_len,
 	usrvar_n,
 	zombies;
 
@@ -1061,6 +1166,8 @@ extern char
 	finder_in_file[PATH_MAX],
 	finder_out_file[PATH_MAX],
 #endif /* _NO_FZF */
+	_fmatch[PATH_MAX], /* First regular match if fuzzy matching is enabled */
+	prop_fields_str[PROP_FIELDS_SIZE],
 
 	*actions_file,
 	*alt_config_dir,
@@ -1088,7 +1195,6 @@ extern char
 	*last_cmd,
 	*log_file,
 	*mime_file,
-	*msg_log_file,
 	*opener,
 	*pinned_dir,
 	*plugins_dir,
@@ -1098,6 +1204,7 @@ extern char
 	*remotes_file,
 /*	*right_prompt, */
 	*sel_file,
+	*smenutab_options_env,
 	*stdin_tmp_dir,
 #ifndef _NO_SUGGESTIONS
 	*suggestion_buf,
@@ -1112,7 +1219,6 @@ extern char
 	*trash_info_dir,
 #endif
 	*usr_cscheme,
-	*user_home,
 	*wprompt_str,
 
 	**argv_bk,
@@ -1121,16 +1227,12 @@ extern char
 	**cdpaths,
 	**color_schemes,
 	**ext_colors,
-	**history,
 	**messages,
 	**old_pwd,
 	**paths,
 	**profile_names,
 	**prompt_cmds,
 	**tags;
-
-extern char *internal_cmds[];
-extern const char *param_str[];
 
 extern regex_t regex_exp;
 extern size_t *ext_colors_len;

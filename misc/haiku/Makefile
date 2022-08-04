@@ -59,6 +59,8 @@ ifdef _NO_TRASH
 LIBS += -D_NO_TRASH
 endif
 
+CFLAGS += -DCLIFM_DATADIR=$(DATADIR)
+
 build: ${OBJS}
 	@printf "Detected operating system: ";
 	@echo "$(OS)"
@@ -76,19 +78,21 @@ install: build
 	$(INSTALL) -m 0755 -d $(DESTDIR)$(DATADIR)/bash-completion/completions
 	$(INSTALL) -m 0755 -d $(DESTDIR)$(DATADIR)/zsh/site-functions
 	$(INSTALL) -m 0644 misc/manpage $(DESTDIR)$(MANPREFIX)/man1/$(BIN).1
-	gzip -- $(DESTDIR)$(MANPREFIX)/man1/$(BIN).1
+	gzip -f -- $(DESTDIR)$(MANPREFIX)/man1/$(BIN).1
 	$(INSTALL) -m 0644 misc/completions.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/$(BIN)
 	$(INSTALL) -m 0644 misc/completions.zsh $(DESTDIR)$(DATADIR)/zsh/site-functions/_$(BIN)
-	$(INSTALL) -m 0644 misc/*.cfm $(DESTDIR)$(PROG_DATADIR)
-	$(INSTALL) -m 0644 misc/haiku/*.cfm $(DESTDIR)$(PROG_DATADIR)
+	$(INSTALL) -m 0644 misc/*.clifm $(DESTDIR)$(PROG_DATADIR)
+	$(INSTALL) -m 0644 misc/haiku/*.clifm $(DESTDIR)$(PROG_DATADIR)
 	$(INSTALL) -m 0644 misc/clifmrc $(DESTDIR)$(PROG_DATADIR)
 	$(INSTALL) -m 0755 -d $(DESTDIR)$(PROG_DATADIR)/plugins
 	$(INSTALL) -m 0755 -d $(DESTDIR)$(PROG_DATADIR)/functions
 	$(INSTALL) -m 0755 -d $(DESTDIR)$(PROG_DATADIR)/colors
+	$(INSTALL) -m 0755 -d $(DESTDIR)$(PROG_DATADIR)/tools
 	$(INSTALL) -m 0755 plugins/* $(DESTDIR)$(PROG_DATADIR)/plugins
+	$(INSTALL) -m 0755 misc/tools/*.py $(DESTDIR)$(PROG_DATADIR)/tools
 	chmod 644 -- $(DESTDIR)$(PROG_DATADIR)/plugins/BFG.cfg
 	chmod 644 -- $(DESTDIR)$(PROG_DATADIR)/plugins/kbgen.c
-	$(INSTALL) -m 0644 misc/colors/*.cfm $(DESTDIR)$(PROG_DATADIR)/colors
+	$(INSTALL) -m 0644 misc/colors/*.clifm $(DESTDIR)$(PROG_DATADIR)/colors
 	$(INSTALL) -m 0644 functions/* $(DESTDIR)$(PROG_DATADIR)/functions
 	@printf "Successfully installed $(BIN)\n"
 

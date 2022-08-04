@@ -37,6 +37,12 @@
 # Replace 'TERM' and 'APP' by the corresponding values. The -e option
 # might vary depending on the terminal emulator used (TERM)
 
+# Note on graphical applications: If the opening application is already
+# running, the file will be opened, usually in a new tab, and CliFM won't
+# wait for the file to be closed (because the procecss already returned).
+# To avoid this, instruct the application to run a new instance. For example:
+# geany -i, gedit -s, kate -n, pluma --new-window, and so on.
+
 # To silence STDERR and/or STDOUT use !E and !O respectivelly (they could
 # be used together). Examples:
 # Silence STDERR only and run in the foreground:
@@ -47,7 +53,7 @@
 #    mpv %f !E !O &
 
 # Environment variables could be used as well. Example:
-# X:text/plain=$TERM -e $EDITOR %f &;$VISUAL;nano;vi
+# X:text/plain=$EDITOR %f &;$VISUAL;nano;vi
 
 ###########################
 #  File names/extensions  #
@@ -66,8 +72,8 @@ X:N:.*\.djvu$=djview;zathura;evince;atril
 X:N:.*\.epub$=mupdf;zathura;ebook-viewer
 X:N:.*\.mobi$=ebook-viewer
 X:N:.*\.(cbr|cbz)$=zathura
-X:N:(.*\.cfm$|clifmrc)=$EDITOR;$VISUAL;kak;micro;nvim;vim;vis;vi;mg;emacs;ed;nano;mili;leafpad;mousepad;featherpad;gedit;kate;pluma
-!X:N:(.*\.cfm$|clifmrc)=$EDITOR;$VISUAL;kak;micro;nvim;vim;vis;vi;mg;emacs;ed;nano
+X:N:(.*\.clifm$|clifmrc)=$EDITOR;$VISUAL;kak;micro;nvim;vim;vi;mg;emacs;ed;nano;mili;leafpad;mousepad;featherpad;gedit -s;kate -n;pluma --new-window
+!X:N:(.*\.clifm$|clifmrc)=$EDITOR;$VISUAL;kak;micro;nvim;vim;vi;mg;emacs;ed;nano
 
 ##################
 #   MIME types   #
@@ -80,13 +86,13 @@ X:inode/directory=xterm -e clifm %f &;xterm -e vifm %f &;pcmanfm %f &;thunar %f 
 !X:inode/directory=vifm;ranger;nnn;ncdu
 
 # Web content
-X:^text/html$=$BROWSER;surf;vimprobable;vimprobable2;qutebrowser;dwb;jumanji;luakit;uzbl;uzbl-tabbed;uzbl-browser;uzbl-core;iceweasel;midori;opera;firefox;seamonkey;chromium-browser;chromium;google-chrome;epiphany;konqueror;elinks;links2;links;lynx;w3m
+X:^text/html$=$BROWSER;surf;vimprobable;vimprobable2;qutebrowser;dwb;jumanji;luakit;uzbl;uzbl-tabbed;uzbl-browser;uzbl-core;iceweasel;midori;opera;firefox;seamonkey;brave;chromium-browser;chromium;google-chrome;epiphany;konqueror;elinks;links2;links;lynx;w3m
 !X:^text/html$=$BROWSER;elinks;links2;links;lynx;w3m
 
 # Text
 #X:^text/x-(c|shellscript|perl|script.python|makefile|fortran|java-source|javascript|pascal)$=geany
-X:(^text/.*|application/json|inode/x-empty)=$EDITOR;$VISUAL;kak;micro;dte;nvim;vim;vis;vi;mg;emacs;ed;nano;mili;leafpad;mousepad;featherpad;nedit;kate;gedit;pluma;io.elementary.code;liri-text;xed;atom;nota;gobby;kwrite;xedit
-!X:(^text/.*|application/json|inode/x-empty)=$EDITOR;$VISUAL;kak;micro;dte;nvim;vim;vis;vi;mg;emacs;ed;nano
+X:(^text/.*|application/json|inode/x-empty)=$EDITOR;$VISUAL;kak;micro;dte;nvim;vim;vi;mg;emacs;ed;nano;mili;leafpad;mousepad;featherpad;nedit;kate;gedit;pluma;io.elementary.code;liri-text;xed;atom;nota;gobby;kwrite;xedit
+!X:(^text/.*|application/json|inode/x-empty)=$EDITOR;$VISUAL;kak;micro;dte;nvim;vim;vi;mg;emacs;ed;nano
 
 # Office documents
 X:^application/.*(open|office)document.*=libreoffice;soffice;ooffice

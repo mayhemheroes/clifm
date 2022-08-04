@@ -24,7 +24,7 @@
 
 #include "helpers.h"
 #ifdef __OpenBSD__
-#include <sys/dirent.h>
+# include <sys/dirent.h>
 #endif
 #include <dirent.h>
 #include <errno.h>
@@ -39,7 +39,7 @@
 
 #include "actions.h"
 #ifndef _NO_ARCHIVING
-#include "archives.h"
+# include "archives.h"
 #endif
 #include "aux.h"
 #include "bookmarks.h"
@@ -66,12 +66,12 @@
 #include "sort.h"
 #include "strings.h"
 #ifndef _NO_TRASH
-#include "trash.h"
+# include "trash.h"
 #endif
 #include "messages.h"
 #include "media.h"
 #ifndef _NO_BLEACH
-#include "name_cleaner.h"
+# include "name_cleaner.h"
 #endif
 #include "sanitize.h"
 #include "tags.h"
@@ -86,8 +86,17 @@ get_new_name(void)
 	rl_nohist = 1;
 
 	char m[NAME_MAX];
-	snprintf(m, NAME_MAX, "Enter new name ('Ctrl-x' to quit)\n"
+	snprintf(m, sizeof(m), "Enter new name ('Ctrl-x' to quit)\n"
 		"\001%s\002>\001%s\002 ", mi_c, tx_c);
+
+	int bk_wp = warning_prompt;
+	int bk_sug = suggestions;
+	int bk_hl = highlight;
+	int bk_prompt_offset = prompt_offset;
+	highlight = 0;
+	suggestions = 0;
+	warning_prompt = 0;
+	prompt_offset = 2;
 
 	while (!input && _xrename) {
 		input = readline(m);
@@ -100,7 +109,12 @@ get_new_name(void)
 		}
 	}
 
+	highlight = bk_hl;
+	suggestions = bk_sug;
+	warning_prompt = bk_wp;
+	prompt_offset = bk_prompt_offset;
 	rl_nohist = 0;
+
 	return input;
 }
 
@@ -235,7 +249,7 @@ run_in_foreground(pid_t pid)
 		}
 	} else { /* waitpid() failed */
 		int ret = errno;
-		fprintf(stderr, "%s: waitpid: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: waitpid: %s\n", PROGRAM_NAME, strerror(errno));
 		return ret;
 	}
 
@@ -248,7 +262,7 @@ run_in_background(pid_t pid)
 	int status = 0;
 	pid_t wpid = waitpid(pid, &status, WNOHANG);
 	if (wpid == -1) {
-		fprintf(stderr, "%s: waitpid: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: waitpid: %s\n", PROGRAM_NAME, strerror(errno));
 		return errno;
 	}
 
@@ -269,8 +283,6 @@ launch_execle(const char *cmd)
 	if (!cmd || !*cmd)
 		return EXNULLERR;
 
-//	get_cursor_position(STDIN_FILENO, STDOUT_FILENO, &curcol, &currow);
-
 	signal(SIGINT, SIG_DFL);
 	signal(SIGQUIT, SIG_DFL);
 	signal(SIGTSTP, SIG_DFL);
@@ -279,10 +291,7 @@ launch_execle(const char *cmd)
 	&& xargs.secure_env == 0)
 		sanitize_cmd_environ();
 
-//	flags |= RUNNING_SHELL_CMD;
-//	flags |= RUNNING_CMD_FG;
 	int ret = system(cmd);
-//	flags &= ~RUNNING_CMD_FG;
 
 	if (xargs.secure_cmds == 1 && xargs.secure_env_full == 0
 	&& xargs.secure_env == 0)
@@ -300,7 +309,6 @@ launch_execle(const char *cmd)
 
 	if (flags & DELAYED_REFRESH) {
 		flags &= ~DELAYED_REFRESH;
-//		get_term_size();
 		reload_dirlist();
 	}
 
@@ -386,7 +394,7 @@ launch_execve(char **cmd, const int bg, const int xflags)
 	int ret = 0;
 	pid_t pid = fork();
 	if (pid < 0) {
-		fprintf(stderr, "%s: fork: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: fork: %s\n", PROGRAM_NAME, strerror(errno));
 		return errno;
 	} else if (pid == 0) {
 		if (bg == 0) {
@@ -418,24 +426,20 @@ launch_execve(char **cmd, const int bg, const int xflags)
 
 	/* Get command status (pid > 0) */
 	else {
-		if (bg) {
+		if (bg == 1) {
 			ret = run_in_background(pid);
 		} else {
-//			flags |= RUNNING_CMD_FG;
 			ret = run_in_foreground(pid);
-//			flags &= ~RUNNING_CMD_FG;
-			if (flags & DELAYED_REFRESH) {
+			if ((flags & DELAYED_REFRESH) && xargs.open != 1) {
 				flags &= ~DELAYED_REFRESH;
-//				get_term_size();
 				reload_dirlist();
 			}
 		}
 	}
 
-	if (bg == 1 && ret == EXIT_SUCCESS) {
-//		get_term_size();
+	if (bg == 1 && ret == EXIT_SUCCESS && xargs.open != 1)
 		reload_dirlist();
-	}
+
 	return ret;
 }
 
@@ -477,8 +481,6 @@ graceful_quit(char **args)
 static inline void
 reload_binaries(void)
 {
-//	flags |= RELOADING_BINARIES;
-
 	if (bin_commands) {
 		int j = (int)path_progsn;
 		while (--j >= 0)
@@ -495,13 +497,13 @@ reload_binaries(void)
 
 	path_n = (size_t)get_path_env();
 	get_path_programs();
-
-//	flags &= ~RELOADING_BINARIES;
 }
 
 static inline int
 __export(char *arg)
 {
+	if (!arg || !*arg)
+		return (-1);
 	char *p = strchr(arg, '=');
 	if (!p || !*(p + 1))
 		return (-1);
@@ -511,7 +513,7 @@ __export(char *arg)
 	*p = '\0';
 	int ret = setenv(arg, p + 1, 1);
 	if (ret == -1)
-		fprintf(stderr, "%s: %s\n", PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s\n", PROGRAM_NAME, strerror(errno));
 	*p = '=';
 
 	return errno;
@@ -582,21 +584,13 @@ check_shell_cmd_condtions(char **args)
 			return EXIT_FAILURE;
 	}
 
-	/* Check whether shell commands are allowed */
-	if (!ext_cmd_ok) {
+	if (ext_cmd_ok == 0) {
 		fprintf(stderr, _("%s: External commands are not allowed. "
 			"Run 'ext on' to enable them.\n"), PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
 
-	if (*args[0] == *argv_bk[0] && strcmp(args[0], argv_bk[0]) == 0) {
-		fprintf(stderr, "%s: Nested instances are not allowed\n",
-		    PROGRAM_NAME);
-		return EXIT_FAILURE;
-	}
-
 	return EXIT_SUCCESS;
-
 }
 
 static int
@@ -617,11 +611,10 @@ run_shell_cmd(char **args)
 	}
 
 	char *cmd = construct_shell_cmd(args);
-//	flags &= ~RUNNING_SHELL_CMD;
 
 	/* Calling the system shell is vulnerable to command injection, true.
 	 * But it is the user here who is directly running the command: this
-	 * is not an untrusted source */
+	 * should not be taken as an untrusted source */
 	int exit_status = launch_execle(cmd); /* lgtm [cpp/command-line-injection] */
 	free(cmd);
 
@@ -632,7 +625,7 @@ run_shell_cmd(char **args)
 
 /* Free everything and exit the program */
 static void
-_quit(char **args)
+_quit(char **args, int exit_status)
 {
 	if (!args || !args[0])
 		return;
@@ -643,7 +636,7 @@ _quit(char **args)
 	while (--i >= 0)
 		free(args[i]);
 	free(args);
-	exit(exit_code);
+	exit(exit_status);
 }
 
 static int
@@ -718,7 +711,7 @@ unicode_function(char *arg)
 }
 
 static int
-folders_first_function(char *arg)
+dirs_first_function(char *arg)
 {
 	if (autols == 0)
 		return EXIT_SUCCESS;
@@ -736,16 +729,16 @@ folders_first_function(char *arg)
 	int exit_status = EXIT_SUCCESS;
 
 	if (*arg == 's' && strcmp(arg, "status") == 0) {
-		printf(_("Folders first is %s\n"),
-			list_folders_first == 1 ? _("enabled") : _("disabled"));
+		printf(_("Directories first is %s\n"),
+			list_dirs_first == 1 ? _("enabled") : _("disabled"));
 	}  else if (*arg == 'o' && strcmp(arg, "on") == 0) {
-		list_folders_first = 1;
+		list_dirs_first = 1;
 		if (autols == 1) reload_dirlist();
-		print_reload_msg(_("Folders first enabled\n"));
+		print_reload_msg(_("Directories first enabled\n"));
 	} else if (*arg == 'o' && strcmp(arg, "off") == 0) {
-		list_folders_first = 0;
+		list_dirs_first = 0;
 		if (autols == 1) reload_dirlist();
-		print_reload_msg(_("Folders first disabled\n"));
+		print_reload_msg(_("Directories first disabled\n"));
 	} else {
 		fprintf(stderr, "%s\n", _(FF_USAGE));
 		return EXIT_FAILURE;
@@ -1000,7 +993,7 @@ msgs_function(char *arg)
 		for (i = 0; i < (size_t)msgs_n; i++)
 			printf("%s", messages[i]);
 	} else {
-		printf(_("%s: There are no messages\n"), PROGRAM_NAME);
+		printf(_("%s: No messages\n"), PROGRAM_NAME);
 	}
 
 	return EXIT_SUCCESS;
@@ -1040,11 +1033,13 @@ lightmode_function(char *arg)
 
 	if (*arg == 'o' && strcmp(arg, "on") == 0) {
 		light_mode = 1;
-		if (autols == 1) reload_dirlist();
+		if (autols == 1)
+			reload_dirlist();
 		print_reload_msg(_("Switched to light mode\n"));
 	} else if (*arg == 'o' && strcmp(arg, "off") == 0) {
 		light_mode = 0;
-		if (autols == 1) reload_dirlist();
+		if (autols == 1)
+			reload_dirlist();
 		print_reload_msg(_("Switched back to normal mode\n"));
 	} else {
 		puts(_(LM_USAGE));
@@ -1205,7 +1200,7 @@ _hidden_function(char **args)
 }
 
 static int
-toggle_exec(char **args)
+_toggle_exec(char **args)
 {
 	if (!args[1] || IS_HELP(args[1])) {
 		puts(_(TE_USAGE));
@@ -1230,7 +1225,7 @@ toggle_exec(char **args)
 			continue;
 		}
 
-		if (xchmod(args[i], attr.st_mode) == -1)
+		if (toggle_exec(args[i], attr.st_mode) == -1)
 			exit_status = EXIT_FAILURE;
 		else
 			n++;
@@ -1368,18 +1363,6 @@ desel_function(char **args)
 }
 
 static int
-search_function(char **args)
-{
-	/* Try first globbing, and if no result, try regex */
-	int ret = search_glob(args, (args[0][1] == '!') ? 1 : 0);
-	if (ret != EXIT_FAILURE)
-		return ret;
-
-	return search_regex(args, (args[0][1] == '!') ? 1 : 0,
-		case_sens_search ? 1 : 0);
-}
-
-static int
 new_instance_function(char **args)
 {
 	int exit_status = EXIT_SUCCESS;
@@ -1429,7 +1412,7 @@ media_function(char *arg, int mode)
 		else
 			puts(_(MEDIA_USAGE));
 		return EXIT_SUCCESS;
-	} 
+	}
 
 	kbind_busy = 1;
 	rl_attempted_completion_function = NULL;
@@ -1555,6 +1538,9 @@ _open_file(char **args, const int i)
 static inline int
 check_auto_first(char **args)
 {
+	if (!args || !args[0] || !*args[0])
+		return (-1);
+
 	if (*args[0] == '/' || (!autocd && !auto_open) || (args[1]
 	&& (*args[1] != '&' || args[1][1])))
 		return (-1);
@@ -1614,7 +1600,7 @@ autocd_dir(char *tmp)
 	if (autocd) {
 		ret = cd_function(tmp, CD_PRINT_ERROR);
 	} else {
-		fprintf(stderr, _("%s: %s: Is a directory\n"), PROGRAM_NAME, tmp);
+		fprintf(stderr, _("%s: cd: %s: Is a directory\n"), PROGRAM_NAME, tmp);
 		ret = EISDIR;
 	}
 	free(tmp);
@@ -1642,32 +1628,26 @@ check_auto_second(char **args)
 		}
 	}
 
-	if (autocd && cdpath_n && !args[1]) {
+	if (autocd == 1 && cdpath_n > 0 && !args[1]) {
 		int ret = cd_function(tmp, CD_NO_PRINT_ERROR);
-		if (ret == EXIT_SUCCESS) {
-			free(tmp);
-			return EXIT_SUCCESS;
-		}
+		if (ret == EXIT_SUCCESS)
+			{ free(tmp); return EXIT_SUCCESS; }
 	}
 
 	struct stat attr;
-	if (stat(tmp, &attr) != 0) {
-		free(tmp);
-		return (-1);
-	}
+	if (stat(tmp, &attr) != 0)
+		{ free(tmp); return (-1); }
 
 	if (autocd == 1 && S_ISDIR(attr.st_mode) && !args[1])
 		return autocd_dir(tmp);
 
 	/* Regular, non-executable file, or exec file not in PATH
 	 * not ./file and not /path/to/file */
-	if (auto_open && S_ISREG(attr.st_mode)
+	if (auto_open == 1 && S_ISREG(attr.st_mode)
 	&& (!(attr.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
 	|| (!is_bin_cmd(tmp) && !(*tmp == '.' && *(tmp + 1) == '/') && *tmp != '/' ) ) )
 		return auto_open_file(args, tmp);
-/*	if (auto_open && S_ISREG(attr.st_mode)
-	&& !(attr.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)))
-		return auto_open_file(args, tmp); */
+
 	free(tmp);
 	return (-1);
 }
@@ -1701,7 +1681,8 @@ lira_function(char **args)
 		return EXIT_SUCCESS;
 	return EXIT_FAILURE;
 #else
-	fprintf(stderr, _("%s: Lira: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
+	UNUSED(args);
+	fprintf(stderr, _("%s: lira: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
 	return EXIT_FAILURE;
 #endif
 }
@@ -1789,6 +1770,7 @@ _trash_function(char **args, int *_cont)
 
 	return exit_status;
 #else
+	UNUSED(args);
 	fprintf(stderr, _("%s: trash: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
 	*_cont = 0;
 	return EXIT_FAILURE;
@@ -1813,6 +1795,7 @@ _untrash_function(char **args, int *_cont)
 
 	return exit_status;
 #else
+	UNUSED(args);
 	fprintf(stderr, _("%s: trash: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
 	*_cont = 0;
 	return EXIT_FAILURE;
@@ -1938,6 +1921,51 @@ bring_to_foreground(char *str)
 
 	return EXIT_SUCCESS;
 } */
+
+/* Print the current working directory. Try first our own internal representation
+ * (workspaces array). If something went wrong, fallback to getcwd(3) */
+static int
+print_cwd(void)
+{
+	if (workspaces && workspaces[cur_ws].path) {
+		printf("%s\n", workspaces[cur_ws].path);
+		return EXIT_SUCCESS;
+	}
+
+	char p[PATH_MAX];
+	*p = '\0';
+	char *buf = getcwd(p, sizeof(p));
+	if (!buf) {
+		int err = errno;
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: getcwd: %s\n", PROGRAM_NAME, strerror(err));
+		return err;
+	}
+
+	printf("%s\n", p);
+	return EXIT_SUCCESS;
+}
+
+/* Return 1 if STR is a path, zero otherwise */
+static int
+is_path(char *str)
+{
+	if (!str || !*str)
+		return 0;
+	if (strchr(str, '\\')) {
+		char *p = dequote_str(str, 0);
+		if (!p)
+			return 0;
+		int ret = access(p, F_OK);
+		free(p);
+		if (ret != 0)
+			return 0;
+	} else {
+		if (access(str, F_OK) != 0)
+			return 0;
+	}
+
+	return 1;
+}
 
 /* Take the command entered by the user, already splitted into substrings
  * by parse_input_str(), and call the corresponding function. Return zero
@@ -2125,7 +2153,7 @@ exec_cmd(char **comm)
 		if (_cont == 0)
 			return exit_code;
 	}
-		
+	
 	else if (*comm[0] == 'u' && (!comm[0][1] || strcmp(comm[0], "undel") == 0
 	|| strcmp(comm[0], "untrash") == 0)) {
 		int _cont = 1; /* Tells whether to continue or return right here */
@@ -2159,8 +2187,11 @@ exec_cmd(char **comm)
 
 		if (*comm[0] == 'l' && !comm[0][1]) {
 			comm[0] = (char *)xrealloc(comm[0], 7 * sizeof(char));
+#if defined(_BE_POSIX)
+			strcpy(comm[0], "ln -s");
+#else
 			strcpy(comm[0], "ln -sn");
-
+#endif
 			/* Make sure the symlink source is always an absolute path */
 			if (comm[1] && *comm[1] != '/' && *comm[1] != '~') {
 				size_t len = strlen(comm[1]);
@@ -2205,7 +2236,7 @@ exec_cmd(char **comm)
 
 	/*    ############### TOGGLE EXEC ##################     */
 	else if (*comm[0] == 't' && comm[0][1] == 'e' && !comm[0][2])
-		return (exit_code = toggle_exec(comm));
+		return (exit_code = _toggle_exec(comm));
 
 	/*    ############### (UN)PIN FILE ##################     */
 	else if (*comm[0] == 'p' && strcmp(comm[0], "pin") == 0)
@@ -2223,14 +2254,19 @@ exec_cmd(char **comm)
 		return (exit_code = props_function(comm));
 
 	/*     ############### SEARCH ##################     */
-	else if (*comm[0] == '/' && !strchr(comm[0], '\\')
-	&& access(comm[0], F_OK) != 0)
+	else if ( (*comm[0] == '/' && is_path(comm[0]) == 0)
+	|| (*comm[0] == '/' && !comm[0][1] && comm[1] && *comm[1] == '-' && IS_HELP(comm[1])) )
 		return (exit_code = search_function(comm));
 
 	/*      ############## HISTORY ##################     */
 	else if (*comm[0] == '!' && comm[0][1] != ' ' && comm[0][1] != '\t'
-	&& comm[0][1] != '\n' && comm[0][1] != '=' && comm[0][1] != '(')
+	&& comm[0][1] != '\n' && comm[0][1] != '=' && comm[0][1] != '(') {
+		if (comm[1] && IS_HELP(comm[1])) {
+			printf("%s\n", HISTEXEC_USAGE);
+			return EXIT_SUCCESS;
+		}
 		exit_code = run_history_cmd(comm[0] + 1);
+	}
 
 	/*    ############### BATCH LINK ##################     */
 	else if (*comm[0] == 'b' && comm[0][1] == 'l' && !comm[0][2])
@@ -2238,22 +2274,8 @@ exec_cmd(char **comm)
 
 	/*    ############### BULK RENAME ##################     */
 	else if (*comm[0] == 'b' && ((comm[0][1] == 'r' && !comm[0][2])
-	|| strcmp(comm[0], "bulk") == 0)) {
-		if (!comm[1]) {
-			fprintf(stderr, "%s\n", _(BULK_USAGE));
-			return (exit_code = EXIT_FAILURE);
-		}
-
-		if (IS_HELP(comm[1])) {
-			puts(_(BULK_USAGE));
-			return EXIT_SUCCESS;
-		}
+	|| strcmp(comm[0], "bulk") == 0))
 		exit_code = bulk_rename(comm);
-	}
-
-/*	else if (*comm[0] == 'f' && comm[0][1] == 'g' && !comm[0][2]) {
-		return (exit_code = bring_to_foreground(comm[1] ? comm[1] : NULL));
-	} */
 
 	/*      ################ SORT ##################     */
 	else if (*comm[0] == 's' && ((comm[0][1] == 't' && !comm[0][2])
@@ -2289,7 +2311,7 @@ exec_cmd(char **comm)
 		else
 			exit_code = archiver(comm, 'd');
 #else
-		fprintf(stderr, _("%s: archiving: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
+		fprintf(stderr, _("%s: archiver: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
 		return EXIT_FAILURE;
 #endif
 	}
@@ -2400,10 +2422,10 @@ exec_cmd(char **comm)
 	|| strcmp(comm[0], "unicode") == 0))
 		return (exit_code = unicode_function(comm[1]));
 
-	/* #### FOLDERS FIRST #### */
-	else if (*comm[0] == 'f' && ((comm[0][1] == 'f' && !comm[0][2])
-	|| strcmp(comm[0], "folders-first") == 0))
-		return (exit_code = folders_first_function(comm[1]));
+	/* #### DIRECTORIES FIRST #### */
+	else if ((*comm[0] == 'f' && comm[0][1] == 'f' && !comm[0][2])
+	|| (*comm[0] == 'd' && strcmp(comm[0], "dirs-first") == 0))
+		return (exit_code = dirs_first_function(comm[1]));
 
 	/* #### LOG #### */
 	else if (*comm[0] == 'l' && strcmp(comm[0], "log") == 0)
@@ -2446,18 +2468,17 @@ exec_cmd(char **comm)
 	|| strcmp(comm[0], "commands") == 0))
 		return (exit_code = list_commands());
 
-	/* These functions just print stuff, so that the value of exit_code
-	 * is always zero, that is to say, success */
 	else if (strcmp(comm[0], "path") == 0 || strcmp(comm[0], "cwd") == 0) {
-		printf("%s\n", workspaces[cur_ws].path); return EXIT_SUCCESS;
+		return (exit_code = print_cwd());
 	}
 
 	else if ((*comm[0] == '?' && !comm[0][1]) || strcmp(comm[0], "help") == 0) {
-		quick_help(); return EXIT_SUCCESS;
+		return (exit_code = quick_help(comm[1] ? comm[1] : NULL));
 	}
 
-	else if (*comm[0] == 'c' && ((comm[0][1] == 'c' && !comm[0][2])
-	|| strcmp(comm[0], "colors") == 0)) {
+	/* These functions just print stuff, so that the value of exit_code
+	 * is always zero, that is to say, success */
+	else if (*comm[0] == 'c' && strcmp(comm[0], "colors") == 0) {
 		colors_function(comm[1]); return EXIT_SUCCESS;
 	}
 
@@ -2482,7 +2503,7 @@ exec_cmd(char **comm)
 	else if ((*comm[0] == 'q' && (!comm[0][1] || strcmp(comm[0], "quit") == 0))
 	|| (*comm[0] == 'e' && strcmp(comm[0], "exit") == 0)
 	|| (*comm[0] == 'Q' && !comm[0][1]))
-		_quit(comm);
+		_quit(comm, old_exit_code);
 
 	else {
 		/* #  AUTOCD & AUTO-OPEN (2) # */
@@ -2598,7 +2619,7 @@ run_profile_line(char *cmd)
 void
 exec_profile(void)
 {
-	if (!config_ok || !profile_file)
+	if (config_ok == 0 || !profile_file)
 		return;
 
 	FILE *fp = fopen(profile_file, "r");

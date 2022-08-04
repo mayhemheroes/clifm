@@ -31,27 +31,30 @@
 //#endif
 #include <dirent.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <stdio.h>
 #include <string.h>
 #ifdef __OpenBSD__
-#include <strings.h>
+# include <strings.h>
 #endif
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
+#include <pwd.h>
 
 #ifdef __OpenBSD__
 typedef char *rl_cpvfunc_t;
-#include <ereadline/readline/readline.h>
-#include <ereadline/readline/history.h>
+# include <ereadline/readline/readline.h>
+# include <ereadline/readline/history.h>
 #else
-#include <readline/readline.h>
-#include <readline/history.h>
+# include <readline/readline.h>
+# include <readline/history.h>
 #endif
 
 #include "misc.h"
 #include "aux.h"
 #include "checks.h"
+#include "exec.h"
 #include "keybinds.h"
 #include "navigation.h"
 #include "readline.h"
@@ -60,15 +63,15 @@ typedef char *rl_cpvfunc_t;
 #include "tags.h"
 
 #ifndef _NO_SUGGESTIONS
-#include "suggestions.h"
+# include "suggestions.h"
 #endif
 
 #ifndef _NO_HIGHLIGHT
-#include "highlight.h"
+# include "highlight.h"
 #endif
 
 #if !defined(S_IFREG) || !defined(S_IFDIR)
-#include <sys/stat.h>
+# include <sys/stat.h>
 #endif
 
 #if !defined(_NO_SUGGESTIONS) && defined(__FreeBSD__)
@@ -80,7 +83,108 @@ int freebsd_sc_console = 0;
 
 struct dirent **tagged_files = (struct dirent **)NULL;
 int tagged_files_n = 0;
-//int rl_file_in_cwd_completion_desired = 1;
+
+#define MAX_EXT_OPTS NAME_MAX
+#define MAX_EXT_OPTS_LEN NAME_MAX
+char ext_opts[MAX_EXT_OPTS][MAX_EXT_OPTS_LEN];
+
+/* Generate completions for command CMD using a modified version of
+ * fish's manpages parser */
+static int
+gen_shell_cmd_comp(char *cmd)
+{
+	if (!cmd || !*cmd || !data_dir || !*data_dir)
+		return EXIT_FAILURE;
+
+	char manpage_parser_file[PATH_MAX];
+	snprintf(manpage_parser_file, PATH_MAX - 1,
+		"%s/%s/tools/manpages_comp_gen.py", data_dir, PNL);
+
+	char *c[] = {manpage_parser_file, "-k", cmd, NULL};
+	return launch_execve(c, FOREGROUND, E_MUTE);
+}
+
+/* Get short and long options for command CMD, store them in the EXT_OPTS
+ * array and return the number of options found */
+static int
+get_shell_cmd_opts(char *cmd)
+{
+	*ext_opts[0] = '\0';
+	if (!cmd || !*cmd || !user.home || (suggestions == 1 && wrong_cmd == 1))
+		return EXIT_FAILURE;
+
+	char p[PATH_MAX];
+//	snprintf(p, PATH_MAX, "%s/.local/share/%s/completions/%s.cfm", user.home, PNL, cmd);
+	snprintf(p, PATH_MAX, "%s/.local/share/%s/completions/%s.clifm", user.home, PNL, cmd);
+
+	struct stat a;
+	if (stat(p, &a) == -1) {
+		if (gen_shell_cmd_comp(cmd) == EXIT_FAILURE || stat(p, &a) == -1)
+			return EXIT_FAILURE;
+	}
+
+	int fd;
+	FILE *fp = open_fstream_r(p, &fd);
+	if (!fp)
+		return EXIT_FAILURE;
+
+	int n = 0;
+	char line[NAME_MAX];
+	while (fgets(line, (int)sizeof(line), fp)) {
+		if (n >= MAX_EXT_OPTS)
+			break;
+		if (!*line || *line == '#' || *line == '\n')
+			continue;
+
+		size_t l = strlen(line);
+		if (l > 0) {
+			while (line[l - 1] == '\n')
+				line[l - 1] = '\0';
+		}
+
+		/* Get short option */
+		char *q = strstr(line, "-s "), *qq = (char *)NULL;
+		if (q && *(q + 1) && *(q + 2) && *(q + 3)) {
+			qq = strchr(q + 3, ' ');
+			if (qq) *qq = '\0';
+			snprintf(ext_opts[n], MAX_EXT_OPTS_LEN, "-%s", q + 3);
+			if (qq)	*qq = ' ';
+			n++;
+		}
+
+		/* Get long option (-OPT or --OPT) */
+		q = strstr((qq && *(qq + 1)) ? qq + 1 : line, "-l ");
+		if (!q)
+			q = strstr((qq && *(qq + 1)) ? qq + 1 : line, "-o ");
+		if (q && *(q + 1) && *(q + 2) && *(q + 3)) {
+			qq = strchr(q + 3, ' ');
+			if (qq)	*qq = '\0';
+
+			/* Some long opts are written as optOPT: remove OPT */
+			/* q + 3 is the beginning of the option name, so that OPT could
+			 * begin at q + 4, but not before */
+			char *t = *(q + 4) ? q + 4 : (char *)NULL;
+			while (t && *t) {
+				if (*t >= 'A' && *t <= 'Z') {
+					*t = '\0';
+					break;
+				}
+				t++;
+			}
+
+			if (*(q + 1) == 'o')
+				snprintf(ext_opts[n], MAX_EXT_OPTS_LEN, "-%s", q + 3);
+			else
+				snprintf(ext_opts[n], MAX_EXT_OPTS_LEN, "--%s", q + 3);
+			if (qq)	*qq = ' ';
+			n++;
+		}
+	}
+
+	*ext_opts[n] = '\0'; /* Mark the end of the options array */
+	close_fstream(fp, fd);
+	return n;
+}
 
 /* Delete key implementation */
 static void
@@ -210,8 +314,7 @@ rl_exclude_input(unsigned char c)
 
 		/* Handle history events. If a suggestion has been printed and
 		 * a history event is triggered (usually via the Up and Down arrow
-		 * keys), the suggestion buffer won't be freed. Let's do it
-		 * here */
+		 * keys), the suggestion buffer won't be freed. Let's do it here */
 #ifndef _NO_SUGGESTIONS
 		else if ((c == 'A' || c == 'B') && suggestion_buf)
 			clear_suggestion(CS_FREEBUF);
@@ -317,25 +420,30 @@ END:
 			if (suggestion.printed)
 				remove_suggestion_not_end();
 		}
+		if (wrong_cmd == 1) { /* Wrong cmd and we are on the first word */
+			char *fs = strchr(rl_line_buffer, ' ');
+			if (fs && rl_line_buffer + rl_point <= fs)
+				s = -1;
+		}
 	}
 #else
 	UNUSED(s);
 #endif /* !_NO_SUGGESTIONS */
 
 #ifndef _NO_HIGHLIGHT
-	if (!highlight) {
+	if (highlight == 0) {
 		if (_del > 0) {
 #ifndef _NO_SUGGESTIONS
 			/* Since we have removed a char, let's check if there is
 			 * a suggestion available using the modified input line */
-			if (wrong_cmd && s == -1 && rl_end) {
+			if (wrong_cmd == 1 && s == -1 && rl_end > 0) {
 				/* If a suggestion is found, the normal prompt will be
 				 * restored and wrong_cmd will be set to zero */
 				rl_suggestions((unsigned char)rl_line_buffer[rl_end - 1]);
 				return 2;
 			}
 			if (rl_point == 0 && rl_end == 0) {
-				if (wrong_cmd)
+				if (wrong_cmd == 1)
 					recover_from_wrong_cmd();
 				if (_del == DEL_EMPTY_LINE)
 					leftmost_bell();
@@ -346,18 +454,25 @@ END:
 		return 0;
 	}
 
-	if (!wrong_cmd)
+	if (wrong_cmd == 0) {
+//		if (rl_point < rl_end) {
+//		if (rl_point < rl_end || _del > 0) {
 		recolorize_line();
+/*		} else {
+			flags |= NO_RECOLOR_LINE;
+			rl_highlight(rl_line_buffer, rl_point ? (size_t)rl_point - 1 : 0, SET_COLOR);
+		} */
+	}
 #endif /* !_NO_HIGHLIGHT */
 
 	if (_del > 0) {
 #ifndef _NO_SUGGESTIONS
-		if (wrong_cmd && s == -1 && rl_end) {
+		if (wrong_cmd == 1 && s == -1 && rl_end > 0) {
 			rl_suggestions((unsigned char)rl_line_buffer[rl_end - 1]);
 			return 2;
 		}
 		if (rl_point == 0 && rl_end == 0) {
-			if (wrong_cmd)
+			if (wrong_cmd == 1)
 				recover_from_wrong_cmd();
 			if (_del == DEL_EMPTY_LINE)
 				leftmost_bell();
@@ -381,9 +496,9 @@ prompt_xrename(void)
 
 	size_t plen = strlen(p);
 	char pp[NAME_MAX];
-	strcpy(pp, p);
+	xstrsncpy(pp, p, sizeof(pp));
 
-	if (plen) {
+	if (plen > 0) {
 		while (pp[--plen] == ' ')
 			pp[plen] = '\0';
 	}
@@ -400,8 +515,9 @@ prompt_xrename(void)
 	} else {
 		char *dstr = dequote_str(pp, 0);
 		if (!dstr) {
-			fprintf(stderr, _("%s: %s: Error dequoting file name\n"),
-					PROGRAM_NAME, pp);
+//			fprintf(stderr, _("%s: %s: Error dequoting file name\n"), PROGRAM_NAME, pp);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: %s: Error dequoting file name\n"),
+				PROGRAM_NAME, pp);
 			xrename = 0;
 			return EXIT_FAILURE;
 		}
@@ -462,21 +578,34 @@ my_rl_getc(FILE *stream)
 			if (c == 4 && control_d_exits == 1) /* Ctrl-d */
 				rl_quit(0, 0);
 
-			if (rl_end == 0)
+			if (rl_end == 0) {
 				fzf_open_with = 0;
+				if (highlight == 1)
+					rl_redisplay();
+			}
 
 			/* 24 == Ctrl-x */
 			if (_xrename) {
-/*				if (RL_ISSTATE(RL_STATE_MOREINPUT))
-					puts("MOREINPUT");
-				if (RL_ISSTATE(RL_STATE_MULTIKEY))
-					puts("MULTIKEY");
-				if (RL_ISSTATE(RL_STATE_METANEXT))
-					puts("METANEXT"); */
-				if ((!control_d_exits && c == 4) || c == 24) {
+/*				if (RL_ISSTATE(RL_STATE_METANEXT)) {
+					if (c == 'A' || c == 'B' || c == 'C' || c == 'D')
+						return c;
+					if ((control_d_exits == 0 && c == 4) || c == 24) {
+						xrename = _xrename = 0;
+						return (EOF);
+					}
+					return 0;
+				} */
+
+/*				if (c == _ESC && !RL_ISSTATE(RL_STATE_MOREINPUT)
+				&& !RL_ISSTATE(RL_STATE_METANEXT))
+					continue; */ /* Skip single ESC key presses */
+
+				if ((control_d_exits == 0 && c == 4) || c == 24) {
 					xrename = _xrename = 0;
 					return (EOF);
 				}
+
+				return c;
 			}
 
 			/* Syntax highlighting is made from here */
@@ -501,9 +630,12 @@ my_rl_getc(FILE *stream)
 					if (freebsd_sc_console)
 						rl_suggestions(c);
 				}
+# elif defined(__NetBSD__)  /* __FreeBSD__ */
+				if (flags & GUI)
+					rl_suggestions(c);
 # else
 				rl_suggestions(c);
-# endif /* __FreeBSD__ */
+# endif /* __NetBSD__ */
 			}
 #endif /* !_NO_SUGGESTIONS */
 			if (ret != -2)
@@ -674,7 +806,7 @@ my_rl_quote(char *text, int mt, char *qp)
 
 /* This is the filename_completion_function() function of an old Bash
  * release (1.14.7) modified to fit CliFM needs */
-static char *
+char *
 my_rl_path_completion(const char *text, int state)
 {
 	if (!text || !*text)
@@ -751,7 +883,7 @@ my_rl_path_completion(const char *text, int state)
 			dirname = savestring("", 1);
 
 		if (dirname[0] == '.' && dirname[1] == '/')
-			exec = 1;
+			exec = 1; /* Only executable files and directories are allowed */
 		else
 			exec = 0;
 
@@ -766,12 +898,11 @@ my_rl_path_completion(const char *text, int state)
 		}
 
 		/* We aren't done yet.  We also support the "~user" syntax. */
-
 		/* Save the version of the directory that the user typed. */
 		size_t dirname_len = strlen(dirname);
 
 		users_dirname = savestring(dirname, dirname_len);
-		/*      { */
+
 		char *temp_dirname;
 		int replace_dirname;
 
@@ -788,7 +919,6 @@ my_rl_path_completion(const char *text, int state)
 			free(users_dirname);
 			users_dirname = savestring(dirname, dirname_len);
 		}
-		/*      } */
 
 		char *d = dirname;
 		if (text_len > FILE_URI_PREFIX_LEN && IS_FILE_URI(text))
@@ -807,16 +937,14 @@ my_rl_path_completion(const char *text, int state)
 
 	/* Now that we have some state, we can read the directory. If we found
 	 * a match among files in dir, break the loop and print the match */
-
 	match = 0;
 
 	size_t dirname_len = 0;
 	if (dirname)
 		dirname_len = strlen(dirname);
 
-	/* This block is used only in case of "/path/./" to remove the
-	 * ending "./" from dirname and to be able to perform thus the
-	 * executable check via access() */
+	/* This block is used only in case of "/path/./" to remove the ending "./"
+	 * from dirname and to be able to perform thus the executable check via access() */
 	exec_path = 0;
 
 	if (dirname_len > 2 && dirname[dirname_len - 3] == '/'
@@ -844,11 +972,20 @@ my_rl_path_completion(const char *text, int state)
 
 		if (lstat(tmp, &attr) == -1)
 			continue;
-
 		type = get_dt(attr.st_mode);
 #else
 		type = ent->d_type;
 #endif /* !_DIRENT_HAVE_D_TYPE */
+
+		if (((suggestions == 1 && nwords == 1) || !strchr(rl_line_buffer, ' '))
+		&& ((type == DT_DIR && autocd == 0) || (type != DT_DIR && auto_open == 0)))
+			continue;
+
+		/* Only dir names for cd */
+		if ((suggestions == 0 || nwords > 1) && xargs.fuzzy_match == 1
+		&& rl_line_buffer && *rl_line_buffer == 'c' && rl_line_buffer[1] == 'd'
+		&& rl_line_buffer[2] == ' ' && type != DT_DIR)
+			continue;
 
 		/* If the user entered nothing before TAB (ex: "cd [TAB]") */
 		if (!filename_len) {
@@ -875,7 +1012,6 @@ my_rl_path_completion(const char *text, int state)
 					break;
 
 				case DT_DIR: match = 1; break;
-
 				default: break;
 				}
 			}
@@ -919,42 +1055,83 @@ my_rl_path_completion(const char *text, int state)
 					match = 1;
 			}
 
-			/* If "./", list only executable regular files */
+			/* If "./", list only executable regular files and directories */
 			else if (exec) {
-				if (type == DT_REG && access(ent->d_name, X_OK) == 0)
+				if (type == DT_DIR || (type == DT_REG && access(ent->d_name, X_OK) == 0))
 					match = 1;
 			}
 
 			/* If "/path/./", list only executable regular files */
 			else if (exec_path) {
-				if (type == DT_REG) {
-					/* dir_tmp is dirname less "./", already
-					 * allocated before the while loop */
+				if (type == DT_REG || type == DT_DIR) {
+					/* dir_tmp is dirname less "./", already allocated before
+					 * the while loop */
 					snprintf(tmp, PATH_MAX, "%s%s", dir_tmp, ent->d_name);
 
-					if (access(tmp, X_OK) == 0)
+					if (type == DT_DIR || access(tmp, X_OK) == 0)
 						match = 1;
 				}
 			}
 
-			/* No filter for everything else. Just print whatever is
-			 * there */
-			else
+			/* No filter for everything else. Just print whatever is there */
+			else {
 				match = 1;
+			}
 		}
 
 		/* If there is at least one char to complete (ex: "cd .[TAB]") */
 		else {
-			/* Check if possible completion match up to the length of
-			 * filename. */
-			if (case_sens_path_comp) {
+			/* Check for possible matches, first using regular matching and
+			 * then, if no match, try fuzzy matching (if enabled) */
+			if (case_sens_path_comp == 1) {
 				if (*ent->d_name != *filename
-				|| (strncmp(filename, ent->d_name, filename_len) != 0))
-					continue;
+				/* Check 2nd char as well before calling strncasecmp() */
+				|| (filename_len > 1 && *(ent->d_name + 1)
+				&& *(ent->d_name + 1) != *(filename + 1))
+
+				|| (strncmp(filename, ent->d_name, filename_len) != 0) ) {
+					if (xargs.fuzzy_match == 0 || *filename == '-')
+						continue;
+					if (flags & STATE_SUGGESTING) {
+						if (!*_fmatch && fuzzy_match(filename, ent->d_name, case_sens_path_comp) == 1) {
+							if (!dirname || (*dirname == '.' && !*(dirname + 1)))
+								xstrsncpy(_fmatch, ent->d_name, sizeof(_fmatch));
+							else
+								snprintf(_fmatch, sizeof(_fmatch), "%s%s", dirname, ent->d_name);
+							continue;
+						} else {
+							continue;
+						}
+					} else {
+						if (fuzzy_match(filename, ent->d_name, case_sens_path_comp) == 0)
+							continue;
+					}
+				}
+
 			} else {
 				if (TOUPPER(*ent->d_name) != TOUPPER(*filename)
-				|| (strncasecmp(filename, ent->d_name, filename_len) != 0))
-					continue;
+				/* Check 2nd char as well before calling strncasecmp() */
+				|| (filename_len > 1 && *(ent->d_name + 1)
+				&& TOUPPER(*(ent->d_name + 1)) != TOUPPER(*(filename + 1)))
+
+				|| (strncasecmp(filename, ent->d_name, filename_len) != 0)) {
+					if (xargs.fuzzy_match == 0 || *filename == '-')
+						continue;
+					if (flags & STATE_SUGGESTING) {
+						if (!*_fmatch && fuzzy_match(filename, ent->d_name, case_sens_path_comp) == 1) {
+							if (!dirname || (*dirname == '.' && !*(dirname + 1)))
+								xstrsncpy(_fmatch, ent->d_name, sizeof(_fmatch));
+							else
+								snprintf(_fmatch, sizeof(_fmatch), "%s%s", dirname, ent->d_name);
+							continue;
+						} else {
+							continue;
+						}
+					} else {
+						if (fuzzy_match(filename, ent->d_name, case_sens_path_comp) == 0)
+							continue;
+					}
+				}
 			}
 
 			if (*rl_line_buffer == 'c'
@@ -1019,9 +1196,9 @@ my_rl_path_completion(const char *text, int state)
 			}
 
 			else if (exec_path) {
-				if (type == DT_REG) {
+				if (type == DT_REG || type == DT_DIR) {
 					snprintf(tmp, PATH_MAX, "%s%s", dir_tmp, ent->d_name);
-					if (access(tmp, X_OK) == 0)
+					if (type == DT_DIR || access(tmp, X_OK) == 0)
 						match = 1;
 				}
 			}
@@ -1042,27 +1219,20 @@ my_rl_path_completion(const char *text, int state)
 
 	/* readdir() returns NULL on reaching the end of directory stream.
 	 * So that if entry is NULL, we have no matches */
-
 	if (!ent) { /* == !match */
 		if (directory) {
 			closedir(directory);
 			directory = (DIR *)NULL;
 		}
 
-		if (dirname) {
-			free(dirname);
-			dirname = (char *)NULL;
-		}
+		free(dirname);
+		dirname = (char *)NULL;
 
-		if (filename) {
-			free(filename);
-			filename = (char *)NULL;
-		}
+		free(filename);
+		filename = (char *)NULL;
 
-		if (users_dirname) {
-			free(users_dirname);
-			users_dirname = (char *)NULL;
-		}
+		free(users_dirname);
+		users_dirname = (char *)NULL;
 
 		return (char *)NULL;
 	}
@@ -1072,7 +1242,6 @@ my_rl_path_completion(const char *text, int state)
 		cur_comp_type = TCMP_PATH;
 		char *temp = (char *)NULL;
 
-		/* dirname && (strcmp(dirname, ".") != 0) */
 		if (dirname && (dirname[0] != '.' || dirname[1])) {
 /*			if (rl_complete_with_tilde_expansion && *users_dirname == '~') {
 				size_t dirlen = strlen(dirname);
@@ -1090,10 +1259,25 @@ my_rl_path_completion(const char *text, int state)
 			temp = (char *)xnmalloc(strlen(users_dirname) +
 					strlen(ent->d_name) + 1, sizeof(char));
 			strcpy(temp, users_dirname);
-/*			} */
 			strcat(temp, ent->d_name);
 		} else {
 			temp = savestring(ent->d_name, strlen(ent->d_name));
+		}
+
+		if (flags & STATE_SUGGESTING) {
+			if (directory) {
+				closedir(directory);
+				directory = (DIR *)NULL;
+			}
+
+			free(dirname);
+			dirname = (char *)NULL;
+
+			free(filename);
+			filename = (char *)NULL;
+
+			free(users_dirname);
+			users_dirname = (char *)NULL;
 		}
 
 		return (temp);
@@ -1126,7 +1310,7 @@ bookmarks_generator(const char *text, int state)
 	return (char *)NULL;
 }
 
-/* Used by history completion */
+/* Used for history and search pattern completion */
 static char *
 hist_generator(const char *text, int state)
 {
@@ -1139,13 +1323,62 @@ hist_generator(const char *text, int state)
 
 	if (!state) {
 		i = 0;
-		len = strlen(text);
+		len = strlen(*text == '!' ? text + 1 : text);
 	}
 
-	/* Look for cmd history entries for a match */
-	while ((name = history[i++]) != NULL) {
-		if (strncmp(name, text, len) == 0)
-			return strdup(name);
+	while ((name = history[i++].cmd) != NULL) {
+		if (*text == '!') {
+			if (len == 0 || (*name == *(text + 1) && strncmp(name, text + 1, len) == 0)
+			|| (xargs.fuzzy_match == 1
+			&& fuzzy_match((char *)(text + 1), name, case_sens_path_comp) == 1))
+				return strdup(name);
+		} else {
+			/* Restrict the search to what seems to be a pattern:
+			 * The string before the first slash or space (not counting the initial
+			 * slash, used to fire up the search function) must contain a pattern
+			 * metacharacter */
+			if (!*name || !*(name + 1))
+				continue;
+			char *ret = strpbrk(name + 1, search_strategy == GLOB_ONLY
+					? " /*?[{" : " /*?[{|^+$.");
+			if (!ret || *ret == ' ' || *ret == '/')
+				continue;
+			if (len == 0 || (*text == *name && strncmp(name, text, len) == 0))
+				return strdup(name);
+		}
+	}
+
+	return (char *)NULL;
+}
+
+static char *
+bm_paths_generator(const char *text, int state)
+{
+	if (!bookmarks || bm_n == 0)
+		return (char *)NULL;
+
+	static int i;
+	static size_t len;
+	char *name;
+
+	if (!state) {
+		i = 0;
+		len = (text && *text + 1 && *text + 2) ? strlen(text + 2) : 0;
+	}
+
+	while (i < (int)bm_n && (name = bookmarks[i++].path) != NULL) {
+		if (len == 0 || (*name == *(text + 2) && strncmp(name, text + 2, len) == 0)
+		|| (xargs.fuzzy_match == 1
+		&& fuzzy_match((char *)(text + 2), name, case_sens_path_comp) == 1)) {
+			size_t nlen = strlen(name);
+			if (nlen > 1 && name[nlen - 1] == '/')
+				name[nlen - 1] = '\0';
+			char *p = abbreviate_file_name(name);
+			char *ret = strdup(p ? p : name);
+			if (p != name)
+				free(p);
+			return ret;
+		}
 	}
 
 	return (char *)NULL;
@@ -1280,33 +1513,38 @@ profiles_generator(const char *text, int state)
 	return (char *)NULL;
 }
 
-/* Used by ELN expansion */
 static char *
 filenames_gen_text(const char *text, int state)
 {
 	static size_t i, len = 0;
 	char *name;
 	rl_filename_completion_desired = 1;
-	/* According to the GNU readline documention: "If it is set to a
-	 * non-zero value, directory names have a slash appended and
-	 * Readline attempts to quote completed file names if they contain
-	 * any embedded word break characters." To make the quoting part
-	 * work I had to specify a custom quoting function (my_rl_quote) */
-	if (!state) { /* state is zero only the first time readline is
-	executed */
+	if (!state) { /* state is zero only the first time readline is executed */
 		i = 0;
 		len = strlen(text);
 	}
 
 	/* Check list of currently displayed files for a match */
 	while (i < files && (name = file_info[i].name) != NULL) {
-		/* If cd, list only directories */
-		if (*rl_line_buffer == 'c' && rl_line_buffer[1] == 'd'
-		&& rl_line_buffer[2] == ' ' && file_info[i].dir == 0)
-			return (char *)NULL;
 		i++;
+		/* If first word, filter files according to autocd and auto-open values */
+		if (((suggestions == 1 && nwords == 1) || !strchr(rl_line_buffer, ' '))
+		&& ( (file_info[i - 1].dir == 1 && autocd == 0)
+		|| (file_info[i - 1].dir == 0 && auto_open == 0) ))
+			continue;
+
+		/* If cd, list only directories */
+		if ((suggestions == 0 || nwords > 1 || (rl_end > 0 && rl_line_buffer[rl_end - 1] == ' '))
+		&& rl_line_buffer && *rl_line_buffer == 'c' && rl_line_buffer[1] == 'd'
+		&& rl_line_buffer[2] == ' ' && file_info[i - 1].dir == 0)
+			continue;
+
 		if (case_sens_path_comp ? strncmp(name, text, len) == 0
 		: strncasecmp(name, text, len) == 0)
+			return strdup(name);
+		if (xargs.fuzzy_match == 0 || (*text == '.' && text[1] == '.') || *text == '-')
+			continue;
+		if (len == 0 || fuzzy_match((char *)text, name, case_sens_path_comp) == 1)
 			return strdup(name);
 	}
 
@@ -1332,6 +1570,9 @@ filenames_gen_eln(const char *text, int state)
 	while (i < files && (name = file_info[i++].name) != NULL) {
 		if (*name == *file_info[num_text - 1].name
 		&& strcmp(name, file_info[num_text - 1].name) == 0) {
+			if (nwords > 1 && rl_line_buffer && *rl_line_buffer == 'c' && rl_line_buffer[1] == 'd'
+			&& rl_line_buffer[2] == ' ' && file_info[num_text - 1].dir == 0)
+				continue;
 #ifndef _NO_SUGGESTIONS
 			if (suggestion_buf)
 				clear_suggestion(CS_FREEBUF);
@@ -1515,6 +1756,42 @@ sort_name_generator(const char *text, int state)
 }
 
 static char *
+workspaces_generator(const char *text, int state)
+{
+	static int i;
+	static size_t len;
+
+	if (!state) {
+		i = 0;
+		len = text ? strlen(text) : 0;
+	}
+
+	if (text && *text >= '1' && *text <= MAX_WS + '0' && !*(text + 1))
+		return (char *)NULL;
+
+	while (i < MAX_WS) {
+		if (!workspaces[i].name) {
+			if (len == 0) {
+				char t[12];
+				snprintf(t, sizeof(t), "%d", i + 1);
+				i++;
+				return strdup(t);
+			}
+		} else {
+			if (len == 0 || (TOUPPER(*workspaces[i].name) == TOUPPER(*text)
+			&& strncasecmp(workspaces[i].name, text, len) == 0)) {
+				char *ret = strdup(workspaces[i].name);
+				i++;
+				return ret;
+			}
+		}
+		i++;
+	}
+
+	return (char *)NULL;
+}
+
+static char *
 sel_entries_generator(const char *text, int state)
 {
 	static int i;
@@ -1527,8 +1804,14 @@ sel_entries_generator(const char *text, int state)
 	}
 
 	while (i < (int)sel_n && (name = sel_elements[i++].name) != NULL) {
-		if (strncmp(name, text, len) == 0)
-			return strdup(name);
+		if (strncmp(name, text, len) == 0) {
+			char *p = abbreviate_file_name(name);
+			char *ret = strdup(p ? p : name);
+			if (p && p != name)
+				free(p);
+			return ret;
+//			return strdup(name);
+		}
 	}
 
 	return (char *)NULL;
@@ -1558,7 +1841,43 @@ prompts_generator(const char *text, int state)
 	return (char *)NULL;
 }
 
-/* Return the list of currently trashed files matching TEXT or NULL */
+/* Return the list of matches for the glob expression TEXT or NULL if no matches */
+static char **
+rl_glob(const char *text)
+{
+	glob_t globbuf;
+
+	if (glob(text, 0, NULL, &globbuf) != EXIT_SUCCESS) {
+		globfree(&globbuf);
+		return (char **)NULL;
+	}
+
+	if (globbuf.gl_pathc == 1) {
+		char **t = (char **)xnmalloc(globbuf.gl_pathc + 1, sizeof(char *));
+		t[0] = savestring(globbuf.gl_pathv[0], strlen(globbuf.gl_pathv[0]));
+		t[1] = (char *)NULL;
+		globfree(&globbuf);
+		return t;
+	}
+
+	size_t i, j = 1;
+	char **t = (char **)xnmalloc(globbuf.gl_pathc + 3, sizeof(char *));
+	t[0] = xnmalloc(1, sizeof(char));
+	*t[0] = '\0';
+
+	for (i = 0; i < globbuf.gl_pathc; i++) {
+		if (SELFORPARENT(globbuf.gl_pathv[i]))
+			continue;
+		t[j] = savestring(globbuf.gl_pathv[i], strlen(globbuf.gl_pathv[i]));
+		j++;
+	}
+	t[j] = (char *)NULL;
+
+	globfree(&globbuf);
+	return t;
+}
+
+/* Return the list of currently trashed files matching TEXT, or NULL */
 static char **
 rl_trashed_files(const char *text)
 {
@@ -1668,105 +1987,6 @@ tags_generator(const char *text, int state)
 
 	return (char *)NULL;
 }
-/*
-static size_t
-rl_count_words(void)
-{
-	char *l = rl_line_buffer;
-	if (!l || !*l)
-		return 0;
-
-	size_t c = 1;
-	while (*l) {
-		if (l != rl_line_buffer && *l == ' '
-		&& *(l - 1) != '\\') //&& *(l + 1) != ' '
-			c++;
-		l++;
-	}
-
-	return c;
-} */
-
-/* THIS IS AWFUL! WRITE A BETTER IMPLEMENTATION */
-/* Complete with options for specific commands */
-static char *
-options_generator(const char *text, int state)
-{
-	char *l = rl_line_buffer;
-	if (!l || !*l)
-		return (char *)NULL;
-
-	static size_t len = 0;
-//	static size_t w = 0;
-	static int i;
-	char *name;
-
-	if (!state) {
-		i = 0;
-		len = strlen(text);
-//		w = rl_count_words();
-	}
-
-#define MAX_OPTS 10
-	char *_opts[MAX_OPTS] = {0};
-
-	/* acd, ao, ext, ff, hf, pg, uc */
-	if ( ( *l == 'a' && ((l[1] == 'o' && l[2] == ' ') || strncmp(l, "acd ", 4) == 0) )
-	|| (*l == 'e' && strncmp(l, "ext ", 4) == 0)
-	|| (*l == 'f' && l[1] == 'f' && l[2] == ' ')
-	|| (*l == 'h' && l[1] == 'f' && l[2] == ' ')
-	|| (*l == 'p' && l[1] == 'g' && l[2] == ' ')
-	|| (*l == 'u' && l[1] == 'c' && l[2] == ' ') ) {
-		_opts[0] = "on"; _opts[1] = "off"; _opts[2] = "status"; _opts[3] = NULL;
-	/* cl, icons */
-	} else if ( (*l == 'c' && l[1] == 'l' && l[2] == ' ')
-	|| (*l == 'i' && strncmp(l, "icons ", 6) == 0) ) {
-		_opts[0] = "on"; _opts[1] = "off"; _opts[2] = NULL;
-	/* pf */
-	} else if (*l == 'p' && l[1] == 'f' && l[2] == ' ') {
-		_opts[0] = "list"; _opts[1] = "set"; _opts[2] = "add"; _opts[3] = "del"; _opts[4] = NULL;
-	/* tag */
-	} else if (*l == 't' && l[1] == 'a' && l[2] == 'g' && l[3] == ' ') {
-		_opts[0] = "list"; _opts[1] = "new"; _opts[2] = "remove";
-		_opts[3] = "rename"; _opts[4] = "untag"; _opts[5] = "merge"; _opts[6] = NULL;
-	/* mm */
-	} else if (*l == 'm' && l[1] == 'm' && l[2] == ' ') {
-		_opts[0] = "info"; _opts[1] = "edit"; _opts[2] = "import"; _opts[3] = NULL;
-	/* history */
-	} else if (*l == 'h' && strncmp(l, "history ", 8) == 0) {
-		_opts[0] = "edit"; _opts[1] = "clear"; _opts[2] = "on";
-		_opts[3] = "off"; _opts[4] = "status"; _opts[5] = NULL;
-	/* b, f */
-	} else if ((*l == 'b' && l[1] == ' ') || (*l == 'f' && l[1] == ' ')) {
-		_opts[0] = "hist"; _opts[1] = "clear"; _opts[2] = NULL;
-	/* fz */
-	} else if (*l == 'f' && l[1] == 'z' && l[2] == ' ') {
-		_opts[0] = "on"; _opts[1] = "off"; _opts[2] = NULL;
-	} else {
-		/* kb */
-		if (*l == 'k' && l[1] == 'b' && l[2] == ' ') {
-			_opts[0] = "edit"; _opts[1] = "reset"; _opts[2] = NULL;
-		}
-	}
-
-/*	if ((*l == '?' && l[1] == ' ') || (*l == 'h' && strncmp(l, "help ", 5) == 0))
-		rl_file_in_cwd_completion_desired = 0; */
-
-	if (!_opts[0])
-		return (char *)NULL;
-
-/*	if (w > 2) { // Do not complete options after the second word
-		rl_file_in_cwd_completion_desired = 0;
-		return (char *)NULL;
-	} */
-
-	while ((name = _opts[i++]) != NULL) {
-		if (strncmp(name, text, len) == 0)
-			return strdup(name);
-	}
-
-	return (char *)NULL;
-}
 
 static char *
 tag_entries_generator(const char *text, int state)
@@ -1861,25 +2081,390 @@ get_cur_tag(void)
 }
 #endif /* _NO_TAGS */
 
+/* Generate possible arguments for a shell command. Arguments should have
+ * been previously loaded by get_ext_options() and stored in ext_opts array */
+static char *
+ext_options_generator(const char *text, int state)
+{
+	static int i;
+	static size_t len;
+	const char *name;
+
+	if (!state) {
+		i = 0;
+		len = strlen(text);
+	}
+
+	while (*(name = ext_opts[i++])) {
+		if (strncmp(name, text, len) == 0)
+			return strdup(name);
+	}
+
+	return (char *)NULL;
+}
+
+static size_t
+rl_count_words(void)
+{
+	if (!rl_line_buffer)
+		return 0;
+
+	char *p = rl_line_buffer;
+	while (*p == ' ')
+		++p;
+	if (!*p)
+		return 0;
+
+	size_t c = 1;
+	while (*p) {
+		if (*p == ' ' && p > rl_line_buffer && *(p - 1) != '\\' && *(p + 1) != ' ')
+			c++;
+		p++;
+	}
+
+	return c;
+}
+
+/* THIS IS AWFUL! WRITE A BETTER IMPLEMENTATION */
+/* Complete with options for specific commands */
+static char *
+options_generator(const char *text, int state)
+{
+	char *l = rl_line_buffer;
+	if (!l || !*l)
+		return (char *)NULL;
+
+	static size_t len = 0, w = 0;
+	static int i;
+	char *name;
+
+	if (state == 0) {
+		i = 0;
+		len = strlen(text);
+		w = rl_count_words();
+	}
+
+	if (w != 2) /* Complete internal options only for the second word */
+		return (char *)NULL;
+
+#define MAX_OPTS 18
+	char *_opts[MAX_OPTS] = {0};
+
+	/* acd, ao, ext, ff, hf, pg, uc */
+	if ( ( *l == 'a' && ((l[1] == 'o' && l[2] == ' ') || strncmp(l, "acd ", 4) == 0) )
+	|| (*l == 'e' && strncmp(l, "ext ", 4) == 0)
+	|| (*l == 'f' && l[1] == 'f' && l[2] == ' ')
+	|| (*l == 'h' && l[1] == 'f' && l[2] == ' ')
+	|| (*l == 'p' && l[1] == 'g' && l[2] == ' ')
+	|| (*l == 'u' && l[1] == 'c' && l[2] == ' ') ) {
+		_opts[0] = "on"; _opts[1] = "off"; _opts[2] = "status"; _opts[3] = NULL;
+	/* cl, icons */
+	} else if ( (*l == 'c' && l[1] == 'l' && l[2] == ' ')
+	|| (*l == 'i' && strncmp(l, "icons ", 6) == 0) ) {
+		_opts[0] = "on"; _opts[1] = "off"; _opts[2] = NULL;
+	/* pf */
+	} else if (*l == 'p' && l[1] == 'f' && l[2] == ' ') {
+		_opts[0] = "list"; _opts[1] = "set"; _opts[2] = "add"; _opts[3] = "del"; _opts[4] = NULL;
+	/* tag */
+	} else if (*l == 't' && l[1] == 'a' && l[2] == 'g' && l[3] == ' ') {
+		_opts[0] = "list"; _opts[1] = "new"; _opts[2] = "remove";
+		_opts[3] = "rename"; _opts[4] = "untag"; _opts[5] = "merge"; _opts[6] = NULL;
+	/* mm */
+	} else if (*l == 'm' && l[1] == 'm' && l[2] == ' ') {
+		_opts[0] = "info"; _opts[1] = "edit"; _opts[2] = "import"; _opts[3] = NULL;
+	/* history */
+	} else if (*l == 'h' && strncmp(l, "history ", 8) == 0) {
+		_opts[0] = "edit"; _opts[1] = "clear"; _opts[2] = "on";
+		_opts[3] = "off"; _opts[4] = "status"; _opts[5] = NULL;
+	/* help topics */
+	} else if (*l == 'h' && l[1] == 'e' && strncmp(l, "help ", 5) == 0) {
+		_opts[0] = "archives";
+		_opts[1] = "autocommands";
+		_opts[2] = "basics";
+		_opts[3] = "bookmarks";
+		_opts[4] = "desktop-notifications";
+		_opts[5] = "dir-jumper";
+		_opts[6] = "file-details";
+		_opts[7] = "file-tags";
+		_opts[8] = "navigation";
+		_opts[9] = "plugins";
+		_opts[10] = "profiles";
+		_opts[11] = "remotes";
+		_opts[12] = "resource-opener";
+		_opts[13] = "selection";
+		_opts[14] = "search";
+		_opts[15] = "theming";
+		_opts[16] = "trash";
+		_opts[17] = NULL;
+	/* b, f */
+	} else if ((*l == 'b' && l[1] == ' ') || (*l == 'f' && l[1] == ' ')) {
+		_opts[0] = "hist"; _opts[1] = "clear"; _opts[2] = NULL;
+	/* fz */
+	} else if (*l == 'f' && l[1] == 'z' && l[2] == ' ') {
+		_opts[0] = "on"; _opts[1] = "off"; _opts[2] = NULL;
+	} else {
+		/* kb */
+		if (*l == 'k' && l[1] == 'b' && l[2] == ' ') {
+			_opts[0] = "edit"; _opts[1] = "reset"; _opts[2] = NULL;
+		}
+	}
+
+	if (!_opts[0])
+		return (char *)NULL;
+
+	while ((name = _opts[i++]) != NULL) {
+		if (strncmp(name, text, len) == 0)
+			return strdup(name);
+	}
+
+	return (char *)NULL;
+}
+
+static char *
+users_generator(const char *text, int state)
+{
+#if defined(__ANDROID__)
+	UNUSED(text); UNUSED(state);
+	return (char *)NULL;
+#else
+	static size_t len;
+	const struct passwd *p;
+	rl_filename_completion_desired = 1;
+
+	if (!state)
+		len = strlen(text);
+
+	while ((p = getpwent())) {
+		if (!p->pw_name) break;
+		if (len == 0 || strncmp(p->pw_name, text, len) == 0) {
+			char t[NAME_MAX];
+			snprintf(t, sizeof(t), "~%s", p->pw_name);
+			return strdup(t);
+		}
+	}
+
+	return (char *)NULL;
+#endif /* __ANDROID__ */
+}
+
+static int
+tag_complete(const char *text)
+{
+	char *l = rl_line_buffer;
+	int comp = 0;
+	if (*(l + 1) && *(l + 2) == ' ') {
+		switch(*(l + 1)) {
+		case 'a': /* fallthough */
+		case 'u':
+			if (text && *text == ':') { /* We have a tag name */
+				comp = 1; cur_comp_type = TCMP_TAGS_C;
+			} else if (*(l + 1) == 'u') { /* We have a tagged file */
+				comp = 2;
+			}
+			break;
+		case 'd': /* fallthough */
+		case 'l': /* fallthough */
+		case 'm': /* fallthough */
+//		case 'n': /* fallthough */
+		case 'y':
+			if (*(l + 1) == 'd' || *(l + 1) == 'l') flags |= MULTI_SEL;
+			comp = 1; cur_comp_type = TCMP_TAGS_S; break;
+		default: break;
+		}
+	} else { /* MATCH LONG OPTIONS */
+		if (strncmp(l, "tag ", 4) != 0)
+			return comp;
+		char *p = l + 4;
+		if (!*p || strncmp(p, "untag ", 6) == 0) {
+			if (text && *text == ':') { /* We have a tag name */
+				comp = 1; cur_comp_type = TCMP_TAGS_C;
+			} else if (*p == 'u') { /* We have a tagged file */
+				comp = 2;
+			}
+		} else if (strncmp(p, "remove ", 7) == 0 || strncmp(p, "list ", 5) == 0
+		/*|| strncmp(p, "new ", 4) == 0 */ || strncmp(p, "rename ", 7) == 0
+		|| strncmp(p, "merge ", 6) == 0) {
+			if (*p == 'r' || *p == 'l') flags |= MULTI_SEL;
+			comp = 1; cur_comp_type = TCMP_TAGS_S;
+		}
+	}
+
+	return comp;
+}
+
+static char *
+file_types_opts_generator(const char *text, int state)
+{
+	UNUSED(text);
+	static int i;
+
+	if (!state)
+		i = 0;
+
+	static char *ft_opts[] = {
+		"b", /* Block device */
+		"c", /* Character device */
+		"d", /* Directory */
+		"f", /* Regular file */
+		"h", /* Multi-hardlink files */
+		"l", /* Symbolic link */
+		"p", /* FIFO/Pipe */
+		"s", /* Socket */
+		"x", /* Executable file */
+		"o", /* Other-writable file */
+		"t", /* File with the sticky bit set */
+		"u", /* SUID file */
+		"g", /* SGID file */
+		"C", /* File with capabilities */
+		NULL
+	};
+
+	char *name;
+	while ((name = ft_opts[i++]))
+		return strdup(name);
+
+	return (char *)NULL;
+}
+
+static char *
+file_types_generator(const char *text, int state)
+{
+	static size_t i;
+	const char *name;
+
+	if (!state)
+		i = 0;
+
+	char *ret = (char *)NULL;
+	while (i < files && (name = file_info[i].name)) {
+		switch(*text) {
+		case 'b':
+			if (file_info[i].type == DT_BLK)
+				ret = strdup(name);
+			break;
+		case 'c':
+			if (file_info[i].type == DT_CHR)
+				ret = strdup(name);
+			break;
+		case 'C':
+			if (file_info[i].color == ca_c)
+				ret = strdup(name);
+			break;
+		case 'd':
+			if (file_info[i].dir == 1)
+				ret = strdup(name);
+			break;
+		case 'f':
+			if (file_info[i].dir == 0)
+				ret = strdup(name);
+			break;
+		case 'h':
+			if (file_info[i].dir == 0 && file_info[i].linkn > 2)
+				ret = strdup(name);
+			break;
+		case 'l':
+			if (file_info[i].type == DT_LNK)
+				ret = strdup(name);
+			break;
+
+		case 'o':
+			if (file_info[i].color == tw_c || file_info[i].color == ow_c)
+				ret = strdup(name);
+			break;
+		case 't':
+			if (file_info[i].color == tw_c || file_info[i].color == st_c)
+				ret = strdup(name);
+			break;
+
+		case 'p':
+			if (file_info[i].type == DT_FIFO)
+				ret = strdup(name);
+			break;
+		case 's':
+			if (file_info[i].type == DT_SOCK)
+				ret = strdup(name);
+			break;
+		case 'x':
+			if (file_info[i].exec == 1)
+				ret = strdup(name);
+			break;
+		case 'u':
+			if (file_info[i].color == su_c)
+				ret = strdup(name);
+			break;
+		case 'g':
+			if (file_info[i].color == sg_c)
+				ret = strdup(name);
+			break;
+		default: break;
+		}
+
+		i++;
+		if (ret)
+			return ret;
+	}
+
+	return (char *)NULL;
+}
+
 char **
 my_rl_completion(const char *text, int start, int end)
 {
 	char **matches = (char **)NULL;
 	cur_comp_type = TCMP_NONE;
+	flags &= ~MULTI_SEL;
 	UNUSED(end);
-	rl_sort_completion_matches = 1;
-//	rl_file_in_cwd_completion_desired = 1;
 
 	while (*text == '\\')
 		++text;
+
+	if (!_xrename && *text == '=') {
+		if (!*(text + 1)) {
+			matches = rl_completion_matches(text, &file_types_opts_generator);
+			if (matches) {
+				cur_comp_type = TCMP_FILE_TYPES_OPTS;
+				return matches;
+			}
+		} else if (!*(text + 2)) {
+			matches = rl_completion_matches(text + 1, &file_types_generator);
+			if (matches) {
+				flags |= MULTI_SEL;
+				cur_comp_type = TCMP_FILE_TYPES_FILES;
+				return matches;
+			}
+		}
+	}
+
+	char *g = strpbrk(text, GLOB_CHARS);
+	// Expand only glob expressions in the last path component
+	if (!_xrename && g && !strchr(g, '/') && access(text, F_OK) != 0) {
+		char *p = (*rl_line_buffer == '/' && rl_end > 1 && !strchr(rl_line_buffer + 1, ' ')
+			&& !strchr(rl_line_buffer + 1, '/'))
+			? (char *)(text + 1) : (char *)text;
+		if ((matches = rl_glob(p)) != NULL) {
+			cur_comp_type = TCMP_GLOB;
+			rl_filename_completion_desired = 1;
+			flags |= MULTI_SEL;
+			return matches;
+		}
+	}
 
 	if (start == 0) { /* Only for the first entered word */
 		/* If the xrename function (for the m command) is running
 		 * only filenames completion is available */
 
-		/* HISTORY CMD COMPLETION */
-		if (!_xrename && *text == '!') {
-			matches = rl_completion_matches(text + 1, &hist_generator);
+		if (!_xrename && *text == '~' && *(text + 1) != '/') {
+			matches = rl_completion_matches(text + 1, &users_generator);
+			endpwent();
+			if (matches) {
+				cur_comp_type = TCMP_USERS;
+				return matches;
+			}
+		}
+
+		/* HISTORY CMD AND SEARCH PATTERNS COMPLETION */
+		if (!_xrename && (*text == '!' || *text == '/')) {
+			matches = rl_completion_matches(text, &hist_generator);
 			if (matches) {
 				cur_comp_type = TCMP_HIST;
 				return matches;
@@ -1896,7 +2481,7 @@ my_rl_completion(const char *text, int start, int end)
 		}
 
 		/* If autocd or auto-open, try to expand ELN's first */
-		if (autocd || auto_open) {
+		if (autocd == 1 || auto_open == 1) {
 			if (*text >= '1' && *text <= '9') {
 				int n = atoi(text);
 
@@ -1919,6 +2504,15 @@ my_rl_completion(const char *text, int start, int end)
 					return matches;
 				}
 			}
+
+			/* #### WILDCARDS EXPANSION #### */
+/*			char *g = strpbrk(text, GLOB_CHARS);
+			if (g && !strchr(g, '/') && (matches = rl_glob(text))) {
+				cur_comp_type = TCMP_GLOB;
+				rl_filename_completion_desired = 1;
+				flags |= MULTI_SEL;
+				return matches;
+			} */
 		}
 
 		/* BOOKMARKS COMPLETION */
@@ -1941,15 +2535,24 @@ my_rl_completion(const char *text, int start, int end)
 	else { /* Second word or more */
 		if (_xrename)
 			return (char **)NULL;
-
 		/* Command names completion for words after process separator:
 		 * ; | && */
-		if (nwords == 1 && rl_line_buffer[rl_end - 1] != ' '
+		if (nwords == 1 && rl_end > 0 && rl_line_buffer[rl_end - 1] != ' '
 		/* No command name contains slashes */
 		&& (*text != '/' || !strchr(text, '/'))) {
 			matches = rl_completion_matches(text, &bin_cmd_generator);
 			if (matches) {
 				cur_comp_type = TCMP_CMD;
+				return matches;
+			}
+		}
+
+		if (*text == 'b' && *(text + 1) == ':') {
+			matches = rl_completion_matches(text, &bm_paths_generator);
+			if (matches) {
+				flags |= MULTI_SEL;
+				rl_filename_completion_desired = 1;
+				cur_comp_type = TCMP_BM_PATHS;
 				return matches;
 			}
 		}
@@ -1981,27 +2584,8 @@ my_rl_completion(const char *text, int start, int end)
 		}
 
 		/* 3. 't? TAG' and 't? :tag' */
-		if (tags_n > 0 && *lb == 't') {
-			int comp = 0;
-			switch(*(lb + 1)) {
-			case 'a': /* fallthough */
-			case 'u':
-				if (*text == ':') {
-					/* We have a tag name */
-					comp = 1;
-					cur_comp_type = TCMP_TAGS_C;
-				} else if (*(lb + 1) == 'u') {
-					/* We're not matching a tag, but a tagged file */
-					comp = 2;
-				}
-				break;
-			case 'd': /* fallthough */
-			case 'l': /* fallthough */
-			case 'm': /* fallthough */
-			case 'n': /* fallthough */
-			case 'y': comp = 1; cur_comp_type = TCMP_TAGS_S; break;
-			default: break;
-			}
+		if (tags_n > 0 && *lb == 't' && rl_end > 2) {
+			int comp = tag_complete(text);
 			if (comp == 1) {
 				matches = rl_completion_matches(text, &tags_generator);
 				if (matches)
@@ -2028,6 +2612,27 @@ my_rl_completion(const char *text, int start, int end)
 				return matches;
 			}
 		}
+
+		/* ##### ~USERS ##### */
+		if (*text == '~' && *(text + 1) != '/') {
+			matches = rl_completion_matches(text + 1, &users_generator);
+			endpwent();
+			if (matches) {
+				cur_comp_type = TCMP_USERS;
+				return matches;
+			}
+		}
+
+		/* #### WILDCARDS EXPANSION #### */
+/*		char *g = strpbrk(text, GLOB_CHARS);
+		// Expand only glob expressions in the last path component
+		if (g && !strchr(g, '/') && access(text, F_OK) != 0
+		&& (matches = rl_glob(text))) {
+			cur_comp_type = TCMP_GLOB;
+			rl_filename_completion_desired = 1;
+			flags |= MULTI_SEL;
+			return matches;
+		} */
 
 		/* #### BACKDIR COMPLETION #### */
 		if (*text != '/' && nwords <= 2 && rl_end >= 3
@@ -2110,7 +2715,7 @@ my_rl_completion(const char *text, int start, int end)
 					*r = '-';
 				}
 			}
-			
+
 			int n = atoi(text);
 			if (n == INT_MIN)
 				return (char **)NULL;
@@ -2249,11 +2854,24 @@ my_rl_completion(const char *text, int start, int end)
 		/* ### SORT COMMAND COMPLETION ### */
 		if (*lb == 's' && (strncmp(lb, "st ", 3) == 0
 		|| strncmp(lb, "sort ", 5) == 0)) {
+			rl_attempted_completion_over = 1;
 			matches = rl_completion_matches(text, &sort_name_generator);
 			if (matches) {
 				cur_comp_type = TCMP_SORT;
 				return matches;
 			}
+		}
+
+		/* ### WORKSPACES COMPLETION ### */
+		if (*lb == 'w' && strncmp(lb, "ws ", 3) == 0 && nwords <= 2) {
+			rl_sort_completion_matches = 0;
+			rl_attempted_completion_over = 1;
+			matches = rl_completion_matches(text, &workspaces_generator);
+			if (matches) {
+				cur_comp_type = TCMP_WORKSPACES;
+				return matches;
+			}
+			rl_sort_completion_matches = 1;
 		}
 
 		/* ### NET COMMAND COMPLETION ### */
@@ -2265,23 +2883,53 @@ my_rl_completion(const char *text, int start, int end)
 			}
 		}
 
-		/* Try to complete with filenames in CWD */
-		if (!text || *text != '/') {
-			rl_sort_completion_matches = 0;
-			if ((matches = rl_completion_matches(text, &options_generator)))
-				return matches;
-			rl_sort_completion_matches = 1;
-//			if (rl_file_in_cwd_completion_desired
-//			&& (matches = rl_completion_matches(text, &filenames_gen_text)) ) {
-			if ((matches = rl_completion_matches(text, &filenames_gen_text))) {
-				cur_comp_type = TCMP_PATH;
+		rl_sort_completion_matches = 0;
+		/* Complete with specific options for internal commands */
+		if ((matches = rl_completion_matches(text, &options_generator)))
+			return matches;
+		rl_sort_completion_matches = 1;
+
+		/* If we have an internal command not dealing with file names,
+		 * do not perform completion */
+		char *p = strchr(lb, ' ');
+		if (p) {
+			*p = '\0';
+			flags |= STATE_COMPLETING;
+			if (is_internal_c(lb) && !is_internal_f(lb)) {
+				rl_attempted_completion_over = 1;
+				*p = ' ';
+				flags &= ~STATE_COMPLETING;
+				return (char **)NULL;
+			}
+			flags &= ~STATE_COMPLETING;
+			*p = ' ';
+		}
+
+		/* Let's try to complete arguments for shell commands */
+		if (*text == '-') {
+			char lw[NAME_MAX]; *lw = '\0'; /* Last word before the dash */
+			char *a = strrchr(rl_line_buffer, ' ');
+			if (a) {
+				*a = '\0';
+				char *b = strrchr(rl_line_buffer, ' ');
+				xstrsncpy(lw, (b && *(b + 1)) ? b + 1 : rl_line_buffer, sizeof(lw));
+				*a = ' ';
+			}
+			if (*lw && get_shell_cmd_opts(lw) > 0
+			&& (matches = rl_completion_matches(text, &ext_options_generator)) ) {
+//				cur_comp_type = TCMP_EXT_OPTS;
 				return matches;
 			}
+		}
+
+		/* Finally, try to complete with filenames in CWD */
+		if ((matches = rl_completion_matches(text, &filenames_gen_text))) {
+			cur_comp_type = TCMP_PATH;
+			return matches;
 		}
 	}
 
 	/* ### PATH COMPLETION ### */
-
 	/* If none of the above, readline will attempt path completion
 	 * instead via my_rl_path_completion() */
 	return matches;
@@ -2290,7 +2938,7 @@ my_rl_completion(const char *text, int start, int end)
 /* Load readline initialization file (inputrc)
  * Check order:
  * 1) INPUTRC environment variable
- * 2) ~/.config/clifm/readline.cfm
+ * 2) ~/.config/clifm/readline.clifm
  * 3) ~/.inputrc
  * 4) /etc/inputrc
  * If neither 1 nor 2 exist, readline will try to read 3 and 4 by default) */
@@ -2306,8 +2954,10 @@ set_rl_init_file(void)
 	if (!config_dir_gral || !*config_dir_gral)
 		return;
 
-	char *rl_file = (char *)xnmalloc(strlen(config_dir_gral) + 14, sizeof(char));
-	sprintf(rl_file, "%s/readline.cfm", config_dir_gral);
+/*	char *rl_file = (char *)xnmalloc(strlen(config_dir_gral) + 14, sizeof(char));
+	sprintf(rl_file, "%s/readline.cfm", config_dir_gral); */
+	char *rl_file = (char *)xnmalloc(strlen(config_dir_gral) + 16, sizeof(char));
+	sprintf(rl_file, "%s/readline.clifm", config_dir_gral);
 	rl_read_init_file(rl_file);
 	free(rl_file);
 }
@@ -2372,7 +3022,7 @@ initialize_readline(void)
 
 	/* Whenever readline finds any of the following chars, it will call
 	 * the quoting function */
-	rl_filename_quote_characters = " \t\n\"\\'`@$><=,;|&{[()]}?!*^#~";
+	rl_filename_quote_characters = " \t\n\"\\'`@$><=,;|&{[()]}?!*^#";
 	/* According to readline documentation, the following string is
 	 * the default and the one used by Bash: " \t\n\"\\'`@$><=;|&{(" */
 
@@ -2411,7 +3061,7 @@ initialize_readline(void)
 #if !defined(_NO_SUGGESTIONS) && defined(__FreeBSD__)
 	if (!(flags & GUI) && getenv("CLIFM_FREEBSD_CONSOLE_SC"))
 		freebsd_sc_console = 1;
-#endif 
+#endif
 
 	return EXIT_SUCCESS;
 }

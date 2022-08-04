@@ -131,16 +131,16 @@ print_filename(char *to_print, char *full_pathname)
 {
 	char *s;
 
-	if (colorize && (cur_comp_type == TCMP_PATH || cur_comp_type == TCMP_SEL
+	if (colorize == 1 && (cur_comp_type == TCMP_PATH || cur_comp_type == TCMP_SEL
 	|| cur_comp_type == TCMP_DESEL || cur_comp_type == TCMP_RANGES)) {
-		colors_list(to_print, 0, 0, 0);
+		colors_list(to_print, NO_ELN, NO_PAD, NO_NEWLINE);
 	} else {
 		for (s = to_print + tab_offset; *s; s++) {
 			PUTX(*s);
 		}
 	}
 
-	if (rl_filename_completion_desired && !colorize) {
+	if (rl_filename_completion_desired && colorize == 0) {
 		if (cur_comp_type == TCMP_CMD) {
 			putc('*', rl_outstream);
 			return 1;
@@ -244,12 +244,12 @@ fzftab_color(char *filename, const struct stat *attr)
 	case S_IFDIR:
 		if (!check_file_access(attr))
 			return nd_c;
-		return get_dir_color(filename, attr->st_mode);
+		return get_dir_color(filename, attr->st_mode, attr->st_nlink);
 	case S_IFREG:
 		if (!check_file_access(attr))
 			return nf_c;
 		char *ext_cl = (char *)NULL;
-		char *ext = strrchr(filename, '.');
+		char *ext = check_ext == 1 ? strrchr(filename, '.') : (char *)NULL;
 		if (ext && ext != filename)
 			ext_cl = get_ext_color(ext);
 		if (ext_cl)
@@ -264,7 +264,7 @@ fzftab_color(char *filename, const struct stat *attr)
 	}
 }
 
-static inline char *
+static char *
 get_entry_color(char **matches, const size_t i)
 {
 	if (colorize == 0)
@@ -278,15 +278,18 @@ get_entry_color(char **matches, const size_t i)
 	if (dlen > FILE_URI_PREFIX_LEN && IS_FILE_URI(dir))
 		dir += FILE_URI_PREFIX_LEN;
 
-	/* Absolute path */
-	if (*dir == '/'  && (cur_comp_type == TCMP_PATH
-	|| cur_comp_type == TCMP_SEL || cur_comp_type == TCMP_DESEL)) {
+	/* Absolute path (/FILE) or file in CWD (./FILE) */
+	if ( (*dir == '/' || (*dir == '.' && *(dir + 1) == '/') ) && (cur_comp_type == TCMP_PATH
+	|| cur_comp_type == TCMP_SEL || cur_comp_type == TCMP_DESEL
+	|| cur_comp_type == TCMP_BM_PATHS) ) {
 		if (lstat(dir, &attr) != -1)
 			return fzftab_color(dir, &attr);
+		return uf_c;
 	}
 
 	/* Tilde */
-	if (*dir == '~' && cur_comp_type == TCMP_PATH) {
+	if (*dir == '~' && (cur_comp_type == TCMP_PATH || cur_comp_type == TCMP_BM_PATHS
+	|| cur_comp_type == TCMP_SEL || cur_comp_type == TCMP_DESEL) ) {
 		char *exp_path = tilde_expand(matches[i]);
 		if (exp_path) {
 			char tmp_path[PATH_MAX + 1];
@@ -294,14 +297,16 @@ get_entry_color(char **matches, const size_t i)
 			free(exp_path);
 			if (lstat(tmp_path, &attr) != -1)
 				return fzftab_color(tmp_path, &attr);
+			return uf_c;
 		}
 	}
 
 	if (cur_comp_type == TCMP_PATH || cur_comp_type == TCMP_RANGES) {
 		char tmp_path[PATH_MAX];
-		snprintf(tmp_path, PATH_MAX, "%s/%s", workspaces[cur_ws].path, dir);
+		snprintf(tmp_path, sizeof(tmp_path), "%s/%s", workspaces[cur_ws].path, dir);
 		if (lstat(tmp_path, &attr) != -1)
 			return fzftab_color(tmp_path, &attr);
+		return uf_c;
 	}
 
 	if (cur_comp_type == TCMP_CMD && is_internal_c(dir))
@@ -310,17 +315,27 @@ get_entry_color(char **matches, const size_t i)
 	return df_c;
 }
 
-static inline void
-write_completion(char *buf, const size_t *offset, int *exit_status,
-				const int multi)
+static void
+write_completion(char *buf, const size_t *offset, int *exit_status, const int multi)
 {
 	/* Remove ending new line char */
 	char *n = strchr(buf, '\n');
 	if (n)
 		*n = '\0';
 
-	if (cur_comp_type == TCMP_ENVIRON)
-		/* Skip the leading dollar sign ($) */
+	if (cur_comp_type == TCMP_GLOB) {
+		size_t blen = strlen(buf);
+		if (blen > 0 && buf[blen - 1] == '/')
+			buf[blen - 1] = '\0';
+		if (*rl_line_buffer == '/' && rl_end > 0
+		&& !strchr(rl_line_buffer + 1, '/') && !strchr(rl_line_buffer + 1, ' ')) {
+			rl_delete_text(0, rl_end);
+			rl_end = rl_point = 0;
+		}
+	}
+
+	if (cur_comp_type == TCMP_ENVIRON || cur_comp_type == TCMP_USERS)
+		/* Skip the leading dollar sign (env vars) and tilde (users) */
 		buf++;
 
 	if (cur_comp_type == TCMP_PATH && multi == 0) {
@@ -331,6 +346,9 @@ write_completion(char *buf, const size_t *offset, int *exit_status,
 		} else {
 			rl_insert_text(buf + *offset);
 		}
+	} else if (cur_comp_type == TCMP_FILE_TYPES_OPTS) {
+		rl_insert_text(buf);
+		return;
 	} else {
 		if (autocd == 0 && cur_comp_type == TCMP_JUMP)
 			rl_insert_text("cd ");
@@ -361,9 +379,8 @@ write_completion(char *buf, const size_t *offset, int *exit_status,
 
 	char deq_str[PATH_MAX];
 	*deq_str = '\0';
-	/* Clang static analysis complains that tmp[4] (deq_str[4]) is a
-	 * garbage value. Initialize only this exact value to get rid of the
-	 * warning */
+	/* Clang static analysis complains that tmp[4] (deq_str[4]) is a garbage
+	 * value. Initialize only this exact value to get rid of the warning */
 	deq_str[4] = '\0';
 	if (strchr(ss, '\\')) {
 		size_t i = 0;
@@ -395,7 +412,7 @@ write_completion(char *buf, const size_t *offset, int *exit_status,
 	}
 
 	char *spath = *_path ? _path : tmp;
-	char *epath = (char *)NULL; 
+	char *epath = (char *)NULL;
 	if (*spath == '~')
 		epath = tilde_expand(spath);
 	else {
@@ -417,10 +434,11 @@ write_completion(char *buf, const size_t *offset, int *exit_status,
 	struct stat attr;
 	if (stat(d, &attr) != -1 && S_ISDIR(attr.st_mode)) {
 		/* If not the root directory, append a slash */
-		if (*d != '/' || *(d + 1))
+		if ((*d != '/' || *(d + 1) || cur_comp_type == TCMP_USERS))
 			rl_insert_text("/");
 	} else {
-		if (cur_comp_type != TCMP_OPENWITH && cur_comp_type != TCMP_TAGS_T)
+		if (rl_end == rl_point && cur_comp_type != TCMP_OPENWITH
+		&& cur_comp_type != TCMP_TAGS_T && cur_comp_type != TCMP_FILE_TYPES_OPTS)
 			rl_stuff_char(' ');
 	}
 
@@ -428,13 +446,13 @@ write_completion(char *buf, const size_t *offset, int *exit_status,
 }
 
 /* Get word after last non-escaped slash */
-static inline char *
-get_last_word(char *matches)
+static char *
+get_last_word(char *str)
 {
-	char *sl = matches;
+	char *sl = str;
 	char *d = (char *)NULL;
 	while (*sl) {
-		if (sl == matches) {
+		if (sl == str) {
 			if (*sl == '/')
 				d = sl;
 		} else {
@@ -445,7 +463,7 @@ get_last_word(char *matches)
 	}
 
 	if (!d) {
-		return matches;
+		return str;
 	} else {
 		if (*d == '/')
 			return d + 1;
@@ -453,9 +471,8 @@ get_last_word(char *matches)
 	}
 }
 
-static inline int
-run_fzf(const size_t *height, const int *offset, const char *lw,
-		const int multi)
+static int
+run_finder(const size_t *height, const int *offset, const char *lw, const int multi)
 {
 	/* If height was not set in FZF_DEFAULT_OPTS nor in the config
 	 * file, let's define it ourselves */
@@ -465,7 +482,22 @@ run_fzf(const size_t *height, const int *offset, const char *lw,
 		snprintf(height_str, sizeof(height_str), "--height=%zu", *height);
 
 	char cmd[(PATH_MAX * 2) + NAME_MAX];
-	if (xargs.fzytab != 1) {
+	if (tabmode == FZY_TAB) {
+		snprintf(cmd, sizeof(cmd), "fzy "
+				"--read-null --pad=%d --query=\"%s\" --reverse "
+				"--tab-accepts --right-accepts --left-aborts "
+				"--lines=%zu %s %s < %s > %s",
+				*offset, lw ? lw : "", *height,
+				colorize == 0 ? "--no-color" : "",
+				multi ? "--multi" : "",
+				finder_in_file, finder_out_file);
+	} else if (tabmode == SMENU_TAB) {
+		snprintf(cmd, sizeof(cmd), "smenu %s "
+				"-t -d -n%zu -limits l:%d -W$'\n' %s < %s > %s",
+				smenutab_options_env ? smenutab_options_env : DEF_SMENU_OPTIONS,
+				*height, PATH_MAX, multi ? "-P$'\n'" : "",
+				finder_in_file, finder_out_file);
+	} else {
 		snprintf(cmd, sizeof(cmd), "fzf %s "
 				"%s --margin=0,0,0,%d "
 				"%s --read0 --ansi "
@@ -475,8 +507,11 @@ run_fzf(const size_t *height, const int *offset, const char *lw,
 				*height_str ? height_str : "", *offset,
 				case_sens_path_comp ? "+i" : "-i",
 				lw ? lw : "", colorize == 0 ? "--no-color" : "",
-				multi ? "--multi --bind tab:toggle+down" : "",
+				multi ? "--multi --bind tab:toggle+down,ctrl-s:select-all,\
+ctrl-d:deselect-all,ctrl-t:toggle-all" : "",
 				finder_in_file, finder_out_file);
+	}
+
 /*		snprintf(cmd, sizeof(cmd), "sk " // skim
 				"%s --margin=0,0,0,%d --color=16 "
 				"--read0 --ansi --inline-info "
@@ -486,18 +521,12 @@ run_fzf(const size_t *height, const int *offset, const char *lw,
 				lw ? lw : "", colorize == 0 ? "--no-color" : "",
 				multi ? "--multi --bind tab:toggle+down" : "",
 				finder_in_file, finder_out_file); */
-	} else {
-		snprintf(cmd, sizeof(cmd), "fzy "
-				"--read-null --pad=%d --query=\"%s\" --reverse "
-				"--tab-accepts --right-accepts --left-aborts "
-				"--lines=%zu %s %s < %s > %s",
-				*offset, lw ? lw : "", *height,
-				colorize == 0 ? "--no-color" : "",
-				multi ? "--multi" : "",
-				finder_in_file, finder_out_file);
-	}
 
-	return launch_execle(cmd);
+	int dr = (flags & DELAYED_REFRESH) ? 1 : 0;
+	flags &= ~DELAYED_REFRESH;
+	int ret = launch_execle(cmd);
+	if (dr == 1) flags |= DELAYED_REFRESH;
+	return ret;
 }
 
 /* Set FZF window's max height. No more than MAX HEIGHT entries will
@@ -535,26 +564,74 @@ get_tagged_file_target(char *filename)
 }
 
 static char *
-print_no_fzf_file(void)
+print_no_finder_file(void)
 {
 	_err('e', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
 		finder_out_file, strerror(errno));
 	return (char *)NULL;
 }
 
+/* If we are completing a path whose last component is a glob expression,
+ * return the selected match for this expression (STR) preceded by
+ * the initial portion of the path (everything before the glob expression):
+ * INITIAL_PATH. We need to do this because, in case of PATH/GLOB, glob(3)
+ * does not return the full path, but only the expanded glob expression
+ * Ex (underscore is an asterisk):
+ * downloads/_.pdf<TAB> -> downloads/file.pdf
+ * _.pdf<TAB> -> file.pdf */
+static char *
+get_glob_file_target(char *str, char *initial_path)
+{
+	if (!str || !*str)
+		return (char *)NULL;
+
+	if (*str == '/' || !initial_path)
+		return str;
+
+	char *p = (char *)xnmalloc(strlen(initial_path) + strlen(str) + 1, sizeof(char));
+	sprintf(p, "%s%s", initial_path, str);
+
+	return p;
+}
+
+/* Given PATH/GLOB (last word of the line buffer) return PATH/, in which case
+ * the return value should be freed by the caller. If not PATH/GLOB, return NULL
+ * Ex (underscore is an asterisk):
+ * documents/misc/_.c -> documents/misc/ */
+static char *
+get_initial_path(void)
+{
+	char *lp = rl_line_buffer ? strrchr(rl_line_buffer, ' ') : (char *)NULL;
+	char *ls = (lp && *(++lp)) ? strrchr(lp, '/') : (char *)NULL;
+
+	if (!ls || !*(ls + 1) || check_glob_char(ls, GLOB_ONLY) == 0)
+		ls = (char *)NULL;
+
+	if (!ls)
+		return (char *)NULL;
+
+	++ls;
+	char bk = *ls;
+	*ls = '\0';
+	char *p = savestring(lp, strlen(lp));
+	*ls = bk;
+	return p;
+}
+
 /* Recover finder (fzf/fzy) output from FINDER_OUT_FILE file
- * Return this output or NULL in case of error */
-static inline char *
-get_fzf_output(const int multi)
+ * Return this output (reformated if needed) or NULL in case of error */
+static char *
+get_finder_output(const int multi)
 {
 	FILE *fp = fopen(finder_out_file, "r");
 	if (!fp)
-		return print_no_fzf_file();
+		return print_no_finder_file();
 
 	char *buf = (char *)xnmalloc(1, sizeof(char)), *line = (char *)NULL;
 	*buf = '\0';
 	size_t bsize = 0, line_size = 0;
 	ssize_t line_len = 0;
+	char *initial_path = (cur_comp_type == TCMP_GLOB) ? get_initial_path() : (char *)NULL;
 
 	while ((line_len = getline(&line, &line_size, fp)) > 0) {
 		if (line[line_len - 1] == '\n')
@@ -563,7 +640,9 @@ get_fzf_output(const int multi)
 		char *q = line;
 		if (multi == 1) {
 			char *s = line;
-			if (cur_comp_type == TCMP_TAGS_F && tags_dir && cur_tag)
+			if (cur_comp_type == TCMP_GLOB)
+				s = get_glob_file_target(line, initial_path);
+			else if (cur_comp_type == TCMP_TAGS_F && tags_dir && cur_tag)
 				s = get_tagged_file_target(line);
 			q = escape_str(s);
 			if (s != line)
@@ -590,20 +669,27 @@ get_fzf_output(const int multi)
 		}
 	}
 
+	free(initial_path);
 	free(line);
 	fclose(fp);
 	unlink(finder_out_file);
 
+	if (*buf == '\0') {
+		free(buf);
+		buf = (char *)NULL;
+	}
+
 	return buf;
 }
 
-static inline void
+static void
 write_comp_to_file(char *entry, const char *color, FILE **fp)
 {
 	char *c = (char *)NULL, tmp[MAX_COLOR + 4];
-	if (cur_comp_type == TCMP_TAGS_F) {
+	if (cur_comp_type == TCMP_TAGS_F || cur_comp_type == TCMP_GLOB
+	|| cur_comp_type == TCMP_FILE_TYPES_FILES) {
 		size_t len = strlen(entry);
-		if (entry[len - 1] == '/')
+		if (len > 1 && entry[len - 1] == '/')
 			entry[len - 1] = '\0';
 		char *p = (char *)NULL;
 		if (*entry == '~')
@@ -621,18 +707,24 @@ write_comp_to_file(char *entry, const char *color, FILE **fp)
 
 	if (wc_xstrlen(entry) == 0) {
 		char *wname = truncate_wname(entry);
-		fprintf(*fp, "%s%c", wname ? wname : entry, '\0');
+		if (tabmode == SMENU_TAB)
+			fprintf(*fp, "%s%c", wname ? wname : entry, '\n');
+		else
+			fprintf(*fp, "%s%c", wname ? wname : entry, '\0');
 		free(wname);
 		return;
 	}
 
-	fprintf(*fp, "%s%s%s%c", c ? c : color, entry, NC, '\0');
+	if (tabmode == SMENU_TAB)
+		fprintf(*fp, "%s%s%s%c", c ? c : color, entry, NC, '\n');
+	else
+		fprintf(*fp, "%s%s%s%c", c ? c : color, entry, NC, '\0');
 }
 
 /* Store possible completions (MATCHES) in FINDER_IN_FILE to pass them to the finder,
  * either FZF or FZY
  * Return the number of stored matches */
-static inline size_t
+static size_t
 store_completions(char **matches, FILE *fp)
 {
 	int no_file_comp = 0;
@@ -640,7 +732,7 @@ store_completions(char **matches, FILE *fp)
 	|| cur_comp_type == TCMP_SORT || cur_comp_type == TCMP_BOOKMARK
 	|| cur_comp_type == TCMP_CSCHEME || cur_comp_type == TCMP_NET
 	|| cur_comp_type == TCMP_PROF || cur_comp_type == TCMP_PROMPTS)
-		no_file_comp = 1;
+		no_file_comp = 1; /* We're not completing file names */
 
 	size_t i;
 	char *_path = (char *)NULL;
@@ -662,7 +754,7 @@ store_completions(char **matches, FILE *fp)
 		} else if (no_file_comp == 1) {
 			color = mi_c;
 		} else if (cur_comp_type != TCMP_HIST && cur_comp_type != TCMP_JUMP
-		&& cur_comp_type != TCMP_TAGS_F) {
+		&& cur_comp_type != TCMP_TAGS_F && cur_comp_type != TCMP_FILE_TYPES_OPTS) {
 			char *cl = get_entry_color(matches, i);
 			char ext_cl[MAX_COLOR + 5];
 			*ext_cl = '\0';
@@ -675,6 +767,7 @@ store_completions(char **matches, FILE *fp)
 			color = *ext_cl ? ext_cl : (cl ? cl : "");
 
 			if (cur_comp_type != TCMP_SEL && cur_comp_type != TCMP_DESEL
+			&& cur_comp_type != TCMP_BM_PATHS
 			&& cur_comp_type != TCMP_OPENWITH && cur_comp_type != TCMP_BACKDIR) {
 				_path = strrchr(matches[i], '/');
 				entry = (_path && *(++_path)) ? _path : matches[i];
@@ -688,7 +781,7 @@ store_completions(char **matches, FILE *fp)
 	return i;
 }
 
-static inline char *
+static char *
 get_query_str(int *fzf_offset)
 {
 	char *query = (char *)NULL;
@@ -731,7 +824,7 @@ get_query_str(int *fzf_offset)
 
 /* Calculate the length of the matching prefix to insert into the line
  * buffer only the non-matched part of the string returned by FZF */
-static inline size_t
+static size_t
 calculate_prefix_len(char *str)
 {
 	size_t prefix_len = 0, len = strlen(str);
@@ -779,14 +872,14 @@ calculate_prefix_len(char *str)
 
 /* Let's define whether we have a case which allows multi-selection
  * Returns 1 if true or zero if false */
-static inline int
+static int
 is_multi_sel(void)
 {
 	enum comp_type t = cur_comp_type;
 
 	if (t == TCMP_SEL || t == TCMP_DESEL || t == TCMP_RANGES
 	|| t == TCMP_TRASHDEL || t == TCMP_UNTRASH || t == TCMP_TAGS_F
-	|| t == TCMP_TAGS_U)
+	|| t == TCMP_TAGS_U || (flags & MULTI_SEL))
 		return 1;
 
 /*	if (t == TCMP_BOOKMARK && (strncmp(rl_line_buffer, "bm del ", 7) == 0
@@ -806,8 +899,8 @@ is_multi_sel(void)
 		|| strncmp(l, "trash ", 6) == 0))
 		/* ac and ad */
 		|| (*l == 'a' && ((l[1] == 'c' || l[1] == 'd') && l[2] == ' '))
-		/* bb and br */
-		|| (*l == 'b' && ((l[1] == 'b' || l[1] == 'r') && l[2] == ' '))
+		/* bb, bl, and br */
+		|| (*l == 'b' && ((l[1] == 'b' || l[1] == 'l' || l[1] == 'r') && l[2] == ' '))
 		/* r */
 		|| (*l == 'r' && l[1] == ' ')
 		/* d/dup */
@@ -861,7 +954,6 @@ clean_rl_buffer(const char *text)
 			rl_point = rl_end = 0;
 		}
 		ERASE_TO_RIGHT;
-//		printf("\x1b[0K");
 	}
 
 	rl_insert_text(text);
@@ -869,10 +961,25 @@ clean_rl_buffer(const char *text)
 	return EXIT_FAILURE;
 }
 
-/* Display possible completions using FZF. If one of these possible
- * completions is selected, insert it into the current line buffer */
+/* Display possible completions using the corresponding finder. If one of these
+ * possible completions is selected, insert it into the current line buffer.
+ *
+ * What is ORIGINAL_QUERY and why we need it?
+ * MATCHES[0] is supposed to hold the common prefix among all possible
+ * completions. This common prefix should be the same as the query string when
+ * performing regular matches. But it might not be the same as the
+ * original query string when performing fuzzy match: then, we need a copy of
+ * this original query string (ORIGINAL_QUERY) to later be passed to FZF
+ * Example:
+ * Query string: '.f'
+ * Returned matches (fuzzy):
+ *   .file
+ *   .this_file
+ *   .beef
+ * Common suffix: '.' (not '.f')
+ * */
 static int
-fzftabcomp(char **matches, const char *text)
+finder_tabcomp(char **matches, const char *text, char *original_query)
 {
 	FILE *fp = fopen(finder_in_file, "w");
 	if (!fp) {
@@ -890,13 +997,14 @@ fzftabcomp(char **matches, const char *text)
 
 	/* Set a pointer to the last word (either space or slash) in the
 	 * input buffer. We use this to highlight the matching prefix in FZF */
-	char *lw = get_last_word(matches[0]);
+	char *lw = get_last_word(original_query ? original_query : matches[0]);
 
 	/* If not already defined (environment or config file), calculate the
 	 * height of the FZF window based on the amount of entries. This
 	 * specifies how many entries will be displayed at once */
 	size_t height = 0;
-	if (fzf_height_set == 0) {
+
+	if (fzf_height_set == 0 || tabmode == FZY_TAB) {
 		size_t max_height = set_fzf_max_win_height();
 		if (i + 1 > max_height)
 			height = max_height;
@@ -906,18 +1014,25 @@ fzftabcomp(char **matches, const char *text)
 
 	/* Calculate the offset (left padding) of the FZF window based on
 	 * cursor position and current query string */
-	int max_fzf_offset = term_cols > 20 ? term_cols - 20 : 0;
-	int fzf_offset = (rl_point + prompt_offset < max_fzf_offset)
+	int max_finder_offset = term_cols > 20 ? term_cols - 20 : 0;
+	int finder_offset = (rl_point + prompt_offset < max_finder_offset)
 			? (rl_point + prompt_offset - 4) : 0;
 
+// TESTING FZF OFFSET!
+	if (text && xargs.fuzzy_match == 1)
+		/* text is not NULL whenever a common prefix was added, replacing
+		 * the original query string */
+		finder_offset -= (int)(strlen(matches[0]) - strlen(text));
+// TESTING FZF OFFSET!
+
 	if (!lw) {
-		fzf_offset++;
+		finder_offset++;
 	} else {
 		size_t lw_len = strlen(lw);
 		if (lw_len > 1) {
-			fzf_offset -= (int)(lw_len - 1);
-			if (fzf_offset < 0)
-				fzf_offset = 0;
+			finder_offset -= (int)(lw_len - 1);
+			if (finder_offset < 0)
+				finder_offset = 0;
 		}
 	}
 
@@ -925,8 +1040,10 @@ fzftabcomp(char **matches, const char *text)
 	/* In case of a range, the sel keyword, or a full tag expression,
 	 * the query string is just empty */
 	if (cur_comp_type != TCMP_RANGES && cur_comp_type != TCMP_SEL
-	&& cur_comp_type != TCMP_TAGS_F) {
-		query = get_query_str(&fzf_offset);
+	&& cur_comp_type != TCMP_BM_PATHS
+	&& cur_comp_type != TCMP_TAGS_F && cur_comp_type != TCMP_GLOB
+	&& cur_comp_type != TCMP_FILE_TYPES_OPTS && cur_comp_type != TCMP_FILE_TYPES_FILES) {
+		query = get_query_str(&finder_offset);
 		if (!query) {
 			if (cur_comp_type == TCMP_TAGS_T)
 				query = lw ? lw + 2 : (char *)NULL;
@@ -936,36 +1053,57 @@ fzftabcomp(char **matches, const char *text)
 				query = lw ? lw : (char *)NULL;
 		}
 		if (!query || !*query) /* Last char is space */
-			fzf_offset++;
+			finder_offset++;
 	}
 
 	if (cur_comp_type == TCMP_TAGS_F) {
 		if (rl_end && rl_line_buffer[rl_end - 1] == ' ')
 			/* Coming from untag ('tu :TAG ') */
-			fzf_offset++;
+			finder_offset++;
 		else { /* Coming from tag expression ('t:FULL_TAG') */
 			char *sp = strrchr(rl_line_buffer,  ' ');
-			fzf_offset = prompt_offset + (int)(sp - rl_line_buffer) - 2;
+			finder_offset = prompt_offset + (int)(sp - rl_line_buffer) - 2;
 		}
-	} else if (cur_comp_type == TCMP_SEL || cur_comp_type == TCMP_RANGES) {
+	} else if (cur_comp_type == TCMP_FILE_TYPES_OPTS) {
+		finder_offset++;
+	} else if (cur_comp_type == TCMP_FILE_TYPES_FILES) {
+		char *sp = strrchr(rl_line_buffer,  ' ');
+		if (sp) /* Expression is second or more word: "text =FILE_TYPE" */
+			finder_offset = prompt_offset + (int)(sp - rl_line_buffer) - 1;
+		else /* Expression is first word: "=FILE_TYPE" */
+			finder_offset = prompt_offset - 2;
+	} else if (cur_comp_type == TCMP_SEL || cur_comp_type == TCMP_RANGES
+	|| cur_comp_type == TCMP_BM_PATHS) {
 		char *sp = strrchr(rl_line_buffer, ' ');
-		fzf_offset = prompt_offset + (int)(sp - rl_line_buffer) - 2;
+		finder_offset = prompt_offset + (int)(sp - rl_line_buffer) - 2;
 	} else if (cur_comp_type == TCMP_TAGS_C) {
 		char *sp = strrchr(rl_line_buffer,  ' ');
-		fzf_offset = prompt_offset + (int)(sp - rl_line_buffer) - 1;
+		finder_offset = prompt_offset + (int)(sp - rl_line_buffer) - 1;
 	} else if (cur_comp_type == TCMP_TAGS_T) {
 		char *sp = strrchr(rl_line_buffer,  ' ');
-		fzf_offset = prompt_offset + (int)(sp - rl_line_buffer);
+		finder_offset = prompt_offset + (int)(sp - rl_line_buffer);
+	} else if (cur_comp_type == TCMP_GLOB) {
+		char *sl = strrchr(rl_line_buffer, '/');
+		char *sp = strrchr(rl_line_buffer, ' ');
+		if (!sl) {
+			if (sp)
+				finder_offset = prompt_offset + (int)(sp - rl_line_buffer) - 2;
+		} else {
+			if (sp && sp > sl)
+				finder_offset = prompt_offset + (int)(sp - rl_line_buffer) - 2;
+			else
+				finder_offset = prompt_offset + (int)(sl - rl_line_buffer) - 2;
+		}
 	}
 
-	if (fzf_offset < 0)
-		fzf_offset = 0;
+	if (finder_offset < 0)
+		finder_offset = 0;
 
 	/* TAB completion cases allowing multiple selection */
 	int multi = is_multi_sel();
 
 	/* Run FZF and store the ouput into the FINDER_OUT_FILE file */
-	int ret = run_fzf(&height, &fzf_offset, query, multi);
+	int ret = run_finder(&height, &finder_offset, query, multi);
 	unlink(finder_in_file);
 
 	/* Calculate currently used lines to go back to the correct cursor
@@ -984,7 +1122,6 @@ fzftabcomp(char **matches, const char *text)
 	}
 
 	MOVE_CURSOR_UP(lines);
-//	printf("\x1b[%dA", lines); /* Move up %d lines */
 
 	/* No results (the user pressed ESC) */
 	if (ret != EXIT_SUCCESS) {
@@ -992,13 +1129,12 @@ fzftabcomp(char **matches, const char *text)
 		return clean_rl_buffer(text);
 	}
 
-	char *buf = get_fzf_output(multi);
+	char *buf = get_finder_output(multi);
 	if (!buf)
 		return EXIT_FAILURE;
 
 	/* Calculate the length of the matching prefix to insert into the
-	 * line buffer only the non-matched part of the string returned
-	 * by FZF */
+	 * line buffer only the non-matched part of the string returned by FZF */
 	size_t prefix_len = calculate_prefix_len(matches[0]);
 
 	if (cur_comp_type == TCMP_OPENWITH) {
@@ -1065,7 +1201,8 @@ fzftabcomp(char **matches, const char *text)
 		prefix_len = 0;
 
 	} else if (cur_comp_type == TCMP_RANGES || cur_comp_type == TCMP_SEL
-	|| cur_comp_type == TCMP_TAGS_F) {
+	|| cur_comp_type == TCMP_TAGS_F || cur_comp_type == TCMP_GLOB
+	|| cur_comp_type == TCMP_BM_PATHS) {
 		char *s = strrchr(rl_line_buffer, ' ');
 		if (s) {
 			rl_point = (int)(s - rl_line_buffer + 1);
@@ -1074,14 +1211,26 @@ fzftabcomp(char **matches, const char *text)
 			prefix_len = 0;
 		}
 
+	} else if (cur_comp_type == TCMP_FILE_TYPES_FILES) {
+		char *s = strrchr(rl_line_buffer, ' ');
+		rl_point = !s ? 0 : (int)(s - rl_line_buffer + 1);
+		rl_delete_text(rl_point, rl_end);
+		rl_end = rl_point;
+		prefix_len = 0;
+
+	} else if (cur_comp_type == TCMP_USERS) {
+		size_t l = strlen(buf);
+		char *p = savestring(buf, l);
+		buf = (char *)xrealloc(buf, (l + 2) * sizeof(char));
+		sprintf(buf, "~%s", p);
+		free(p);
 	} else {
-		if (!case_sens_path_comp && query) {
-			/* Honor case insensitive completion */
-			size_t query_len = strlen(query);
-			if (strncmp(query, buf, query_len) != 0) {
+		if ((case_sens_path_comp == 0 || xargs.fuzzy_match == 1) && query) {
+			/* Honor case insensitive completion/fuzzy matches */
+			if (strncmp(matches[0], buf, prefix_len) != 0) {
 				int bk = rl_point;
-				rl_delete_text(bk - (int)query_len, rl_end);
-				rl_point = rl_end = bk - (int)query_len;
+				rl_delete_text(bk - (int)prefix_len, rl_end);
+				rl_point = rl_end = bk - (int)prefix_len;
 				prefix_len = 0;
 			}
 		}
@@ -1116,9 +1265,33 @@ fzftabcomp(char **matches, const char *text)
 	}
 
 	free(buf);
+
+#ifndef _NO_SUGGESTIONS
+	if (suggestions && nwords == 1 && wrong_cmd == 1) {
+		fputs(NC, stdout);
+		fflush(stdout);
+		rl_restore_prompt();
+		wrong_cmd = 0;
+	}
+#endif
+
 	return exit_status;
 }
 #endif /* !_NO_FZF */
+
+/* Simple comparison routine for qsort()ing strings */
+static int
+compare_strings (s1, s2)
+  char **s1, **s2;
+{
+	int ret;
+
+	ret = **s1 - **s2;
+	if (ret == 0)
+		ret = strcmp(*s1, *s2);
+
+	return ret;
+}
 
 /* Complete the word at or before point.
    WHAT_TO_DO says what to do with the completion.
@@ -1137,16 +1310,19 @@ tab_complete(int what_to_do)
 
 	if (*rl_line_buffer == '#' || cur_color == hc_c) {
 		/* No completion at all if comment */
+#ifndef _NO_SUGGESTIONS
 		if (suggestion.printed)
 			clear_suggestion(CS_FREEBUF);
+#endif /* _NO_SUGGESTIONS */
 		return EXIT_SUCCESS;
 	}
 
 	rl_compentry_func_t *our_func = rl_completion_entry_function;
 
-	/* Only the completion entry function can change these. */
+	/* Only the completion entry function can change these */
 	rl_filename_completion_desired = 0;
 	rl_filename_quoting_desired = 1;
+	rl_sort_completion_matches = 1;
 
 	int end = rl_point, delimiter = 0;
 	char quote_char = '\0';
@@ -1265,14 +1441,22 @@ AFTER_USUAL_COMPLETION:
 	/* It seems to me that in all the cases we handle we would like
 	 * to ignore duplicate possiblilities. Scan for the text to
 	 * insert being identical to the other completions. */
-	if (rl_ignore_completion_duplicates) {
+	if (rl_ignore_completion_duplicates == 1) {
 		char *lowest_common;
 		size_t j;
 		size_t newlen = 0;
 		char dead_slot;
 		char **temp_array;
 
-		/* Remember the lowest common denominator for it may be unique. */
+		if (cur_comp_type == TCMP_HIST) {// || cur_comp_type == TCMP_EXT_OPTS) {
+			/* Sort the array without matches[0]: we need it to stay in
+			 * place no matter what */
+			for (i = 0; matches[i]; i++);
+			if (i > 0)
+				qsort(matches + 1, i - 1, sizeof(char *), compare_strings);
+		}
+
+		/* Remember the lowest common denominator, for it may be unique */
 		lowest_common = savestring(matches[0], strlen(matches[0]));
 
 		for (i = 0; matches[i + 1]; i++) {
@@ -1284,8 +1468,8 @@ AFTER_USUAL_COMPLETION:
 			}
 		}
 
-		/* We have marked all the dead slots with (char *)&dead_slot.
-		 * Copy all the non-dead entries into a new array. */
+		/* We have marked all the dead slots with (char *)&dead_slot
+		 * Copy all the non-dead entries into a new array */
 		temp_array = (char **)xnmalloc(3 + newlen, sizeof (char *));
 		for (i = j = 1; matches[i]; i++) {
 			if (matches[i] != (char *)&dead_slot) {
@@ -1304,9 +1488,8 @@ AFTER_USUAL_COMPLETION:
 		/* Place the lowest common denominator back in [0]. */
 		matches[0] = lowest_common;
 
-		/* If there is one string left, and it is identical to the
-		 * lowest common denominator (LCD), then the LCD is the string to
-		 * insert. */
+		/* If there is one string left, and it is identical to the lowest
+		 * common denominator (LCD), then the LCD is the string to insert */
 		if (j == 2 && strcmp(matches[0], matches[1]) == 0) {
 			free(matches[1]);
 			matches[1] = (char *)NULL;
@@ -1340,7 +1523,6 @@ AFTER_USUAL_COMPLETION:
 		 * such as if we change the string we are completing on and the new
 		 * set of matches don't require a quoted substring. */
 		char *replacement = matches[0];
-
 		should_quote = matches[0] && rl_completer_quote_characters &&
 		rl_filename_completion_desired && rl_filename_quoting_desired;
 
@@ -1369,22 +1551,31 @@ AFTER_USUAL_COMPLETION:
 
 				/* escape_str escapes the leading tilde, but we don't
 				 * want it here. Remove it */
-				if (cur_comp_type == TCMP_PATH && *matches[0] == '~') {
+/*				if (cur_comp_type == TCMP_PATH && *matches[0] == '~') {
 					char *tmp = strdup(replacement + 1);
 					free(replacement);
 					replacement = tmp;
-				}
+				} */
 			}
 		}
 
 		if (replacement && cur_comp_type != TCMP_HIST
+		&& cur_comp_type != TCMP_FILE_TYPES_OPTS
+		&& (cur_comp_type != TCMP_FILE_TYPES_FILES || !matches[1])
+		&& (cur_comp_type != TCMP_GLOB || !matches[1])
 		&& cur_comp_type != TCMP_JUMP && cur_comp_type != TCMP_RANGES
-		&& (cur_comp_type != TCMP_SEL || !fzftab || sel_n == 1)
+		&& (cur_comp_type != TCMP_SEL || fzftab != 1 || sel_n == 1)
+
+		&& (cur_comp_type != TCMP_BM_PATHS || !matches[1])
+
 		&& (cur_comp_type != TCMP_TAGS_F || !matches[1])) {
 			enum comp_type c = cur_comp_type;
 			if ((c == TCMP_SEL || c == TCMP_DESEL || c == TCMP_NET
+
+			|| c == TCMP_BM_PATHS
+
 			|| c == TCMP_TAGS_C || c == TCMP_TAGS_S || c == TCMP_TAGS_T
-			|| c == TCMP_TAGS_U || c == TCMP_BOOKMARK
+			|| c == TCMP_TAGS_U || c == TCMP_BOOKMARK || c == TCMP_GLOB
 			|| c == TCMP_PROMPTS) && !strchr(replacement, '\\')) {
 				char *r = escape_str(replacement);
 				if (!r) {
@@ -1400,7 +1591,6 @@ AFTER_USUAL_COMPLETION:
 			rl_begin_undo_group();
 			rl_delete_text(start, rl_point);
 			rl_point = start;
-
 #ifndef _NO_HIGHLIGHT
 			if (highlight && !wrong_cmd) {
 				size_t k, l = 0;
@@ -1448,11 +1638,18 @@ AFTER_USUAL_COMPLETION:
 		if (replacement != matches[0])
 			free(replacement);
 
-		/* If there are more matches, ring the bell to indicate.
-		 If this was the only match, and we are hacking files,
-		 check the file to see if it was a directory. If so,
-		 add a '/' to the name.  If not, and we are at the end
-		 of the line, then add a space. */
+/*		if (cur_comp_type == TCMP_FILE_TYPES_FILES) {
+			char *s = strrchr(rl_line_buffer, ' ');
+			rl_point = !s ? 0 : (int)(s - rl_line_buffer + 1);
+			rl_delete_text(rl_point, rl_end);
+			rl_end = rl_point;
+			rl_redisplay();
+		} */
+
+		/* If there are more matches, ring the bell to indicate. If this was
+		 * the only match, and we are hacking files, check the file to see if
+		 * it was a directory. If so, add a '/' to the name.  If not, and we
+		 * are at the end of the line, then add a space. */
 		if (matches[1]) {
 			if (what_to_do == '!') {
 				goto DISPLAY_MATCHES;		/* XXX */
@@ -1470,8 +1667,7 @@ AFTER_USUAL_COMPLETION:
 			}
 
 			if (fzftab != 1 || cur_comp_type != TCMP_TAGS_T) {
-				temp_string[temp_string_index] = (char)(delimiter
-						? delimiter : ' ');
+				temp_string[temp_string_index] = (char)(delimiter ? delimiter : ' ');
 				temp_string_index++;
 			}
 			temp_string[temp_string_index] = '\0';
@@ -1535,7 +1731,7 @@ AFTER_USUAL_COMPLETION:
 
 DISPLAY_MATCHES:
 #ifndef _NO_FZF
-		if (!fzftab) {
+		if (fzftab != 1) {
 #endif /* !_NO_FZF */
 		{
 			max = 0;
@@ -1562,8 +1758,7 @@ DISPLAY_MATCHES:
 					fputs(tx_c, stdout);
 				}
 #endif /* !_NO_HIGHLIGHT */
-				fprintf(rl_outstream,
-					 "Display all %d possibilities? (y or n) ", len);
+				fprintf(rl_outstream, "Display all %d possibilities? (y or n) ", len);
 				fflush(rl_outstream);
 				if (!get_y_or_n())
 					goto RESTART;
@@ -1632,7 +1827,9 @@ DISPLAY_MATCHES:
 CALC_OFFSET:
 #ifndef _NO_FZF
 		if (fzftab == 1) {
-			if (fzftabcomp(matches, common_prefix_added == 1 ? text : NULL) == -1)
+			char *t = text ? text : (char *)NULL;
+			if (finder_tabcomp(matches, common_prefix_added == 1 ? t : NULL,
+			xargs.fuzzy_match == 1 ? t : NULL) == -1)
 				goto RESTART;
 			goto RESET_PATH;
 		}
@@ -1646,8 +1843,11 @@ CALC_OFFSET:
 			ptr++;
 		}
 
-		qq = strrchr(ptr, '/');
-		if (qq) {
+/*		qq = strrchr(ptr, '/');
+		if (qq) { */
+		qq = (cur_comp_type == TCMP_DESEL || cur_comp_type == TCMP_SEL)
+			? ptr : strrchr(ptr, '/');
+		if (qq && qq != ptr) {
 			if (*(++qq)) {
 				tab_offset = strlen(qq);
 			} else {
@@ -1660,7 +1860,9 @@ CALC_OFFSET:
 			tab_offset = strlen(ptr);
 		}
 
-		if (cur_comp_type == TCMP_RANGES || cur_comp_type == TCMP_BACKDIR)
+		if (cur_comp_type == TCMP_RANGES || cur_comp_type == TCMP_BACKDIR
+		|| cur_comp_type == TCMP_FILE_TYPES_FILES || cur_comp_type == TCMP_FILE_TYPES_OPTS
+		|| cur_comp_type == TCMP_BM_PATHS)
 			tab_offset = 0;
 
 		for (i = 1; i <= (size_t)count; i++) {
@@ -1720,26 +1922,20 @@ RESET_PATH:
 RESTART:
 		rl_on_new_line();
 #ifndef _NO_HIGHLIGHT
-		if (highlight && !wrong_cmd) {
+		if (highlight == 1 && wrong_cmd == 0) {
 			int bk = rl_point;
+/*			rl_point = 0;
+			recolorize_line();
+			rl_point = bk; */
 			fputs(HIDE_CURSOR, stdout);
 			char *ss = rl_copy_text(0, rl_end);
 			rl_delete_text(0, rl_end);
 			rl_redisplay();
 			rl_point = rl_end = 0;
-/*			int wc = wrong_cmd_line;
-			if (wc) {
-				cur_color = hw_c;
-				fputs(cur_color, stdout);
-			} */
+
 			l = 0;
 			char t[PATH_MAX];
 			for (k = 0; ss[k]; k++) {
-/*				if (ss[k] == ' ')
-					wc = 0;
-
-				if (!wc)
-					rl_highlight(ss, (size_t)k, SET_COLOR); */
 				rl_highlight(ss, (size_t)k, SET_COLOR);
 
 				if (ss[k] < 0) {
@@ -1760,7 +1956,8 @@ RESTART:
 				rl_redisplay();
 			}
 			fputs(UNHIDE_CURSOR, stdout);
-			rl_point = rl_end = bk;
+//			rl_point = rl_end = bk;
+			rl_point = bk;
 			free(ss);
 		}
 #endif /* !_NO_HIGHLIGHT */

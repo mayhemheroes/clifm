@@ -63,6 +63,34 @@
 #define STRINGIZE_(x) #x
 #define STRINGIZE(x) STRINGIZE_(x)
 
+void
+set_prop_fields(char *line)
+{
+	if (!line || !*line)
+		return;
+
+	prop_fields.perm =  0;
+	prop_fields.ids =   0;
+	prop_fields.time =  0;
+	prop_fields.size =  0;
+	prop_fields.inode = 0;
+
+	size_t i;
+	for (i = 0; i < PROP_FIELDS_SIZE && line[i]; i++) {
+		switch(line[i]) {
+		case 'd': prop_fields.inode = 1; break;
+		case 'p': prop_fields.perm = PERM_SYMBOLIC; break;
+		case 'n': prop_fields.perm = PERM_NUMERIC; break;
+		case 'i': prop_fields.ids = 1; break;
+		case 'a': prop_fields.time = PROP_TIME_ACCESS; break;
+		case 'c': prop_fields.time = PROP_TIME_CHANGE; break;
+		case 'm': prop_fields.time = PROP_TIME_MOD; break;
+		case 's': prop_fields.size = 1; break;
+		default: break;
+		}
+	}
+}
+
 int
 get_sys_shell(void)
 {
@@ -100,10 +128,10 @@ int
 init_gettext(void)
 {
 	char locale_dir[PATH_MAX];
-	snprintf(locale_dir, PATH_MAX - 1, "%s/locale", data_dir
-			? data_dir : "/usr/share");
+	snprintf(locale_dir, PATH_MAX - 1, "%s/locale", data_dir ? data_dir : "/usr/local/share");
 	bindtextdomain(PNL, locale_dir);
 	textdomain(PNL);
+
 	return EXIT_SUCCESS;
 
 }
@@ -128,8 +156,10 @@ init_workspaces(void)
 {
 	workspaces = (struct ws_t *)xnmalloc(MAX_WS, sizeof(struct ws_t));
 	int i = MAX_WS;
-	while (--i >= 0)
+	while (--i >= 0) {
 		workspaces[i].path = (char *)NULL;
+		workspaces[i].name = (char *)NULL;
+	}
 
 	return EXIT_SUCCESS;
 }
@@ -137,26 +167,19 @@ init_workspaces(void)
 int
 get_home(void)
 {
-	if (access(user.home, W_OK) == -1) {
+	if (!user.home || access(user.home, W_OK) == -1) {
 		/* If no user's home, or if it's not writable, there won't be
-		 * any config nor trash directory. These flags are used to
-		 * prevent functions from trying to access any of these
-		 * directories */
-		home_ok = 0;
-		config_ok = 0;
-#ifndef _NO_TRASH
-		trash_ok = 0;
-#endif
-		/* Print message: trash, bookmarks, command logs, commands
-		 * history and program messages won't be stored */
+		 * any config directory. These flags are used to prevent functions
+		 * from trying to access any of these directories */
+		home_ok = config_ok = 0;
+
 		_err('e', PRINT_PROMPT, _("%s: Cannot access the home directory. "
-				  "Trash, bookmarks, commands logs, and commands history are "
-				  "disabled. Program messages and selected files won't be "
-				  "persistent. Using default options\n"), PROGRAM_NAME);
+			"Bookmarks, commands logs, and commands history are "
+			"disabled. Program messages, selected files, and the jump database "
+			"won't be persistent. Using default options\n"), PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
 
-	user_home_len = strlen(user.home);
 	return EXIT_SUCCESS;
 }
 
@@ -166,11 +189,9 @@ init_history(void)
 	if (!hist_file)
 		return EXIT_FAILURE;
 
-	/* Limit the log files size */
+	/* Shrink the log file size */
 	if (log_file)
 		check_file_size(log_file, max_log);
-	if (msg_log_file)
-		check_file_size(msg_log_file, max_log);
 
 	/* Get history */
 	struct stat attr;
@@ -200,11 +221,39 @@ init_history(void)
 	return EXIT_SUCCESS;
 }
 
+/* If path was not set (neither in the config file nor via command line nor
+ * via the RestoreLastPath option), set the default (CWD), and if CWD is not
+ * set, use the user's home directory, and if the home cannot be found either,
+ * try the root directory, and if there's no access to the root dir either, exit */
+static void
+set_cur_workspace(void)
+{
+	if (workspaces[cur_ws].path)
+		return;
+
+	char cwd[PATH_MAX] = "";
+	if (getcwd(cwd, sizeof(cwd)) == NULL) { /* avoid compiler warning */ }
+	if (!*cwd || strlen(cwd) == 0) {
+		if (user.home) {
+			workspaces[cur_ws].path = savestring(user.home, user.home_len);
+		} else {
+			if (access("/", R_OK | X_OK) == -1) {
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: /: %s\n", PROGRAM_NAME, strerror(errno));
+				exit(EXIT_FAILURE);
+			} else {
+				workspaces[cur_ws].path = savestring("/", 1);
+			}
+		}
+	} else {
+		workspaces[cur_ws].path = savestring(cwd, strlen(cwd));
+	}
+}
+
 int
 set_start_path(void)
 {
 	/* Last path is overriden by positional parameters in the command line */
-	if (restore_last_path)
+	if (restore_last_path == 1)
 		get_last_path();
 
 	if (cur_ws == UNSET)
@@ -213,42 +262,14 @@ set_start_path(void)
 	if (cur_ws > MAX_WS - 1) {
 		cur_ws = DEF_CUR_WS;
 		_err('w', PRINT_PROMPT, _("%s: %zu: Invalid workspace."
-			"\nFalling back to workspace %zu\n"), PROGRAM_NAME,
-		    cur_ws, cur_ws + 1);
+			"\nFalling back to workspace %zu\n"), PROGRAM_NAME, cur_ws, cur_ws + 1);
 	}
 
-	/* If path was not set (neither in the config file nor via command
-	 * line nor via the RestoreLastPath option), set the default (CWD),
-	 * and if CWD is not set, use the user's home directory, and if the
-	 * home cannot be found either, try the root directory, and if
-	 * there's no access to the root dir either, exit.
-	 * Bear in mind that if you launch CliFM through a terminal emulator,
-	 * say xterm (xterm -e clifm), xterm will run a shell, say bash, and
-	 * the shell will read its config file. Now, if this config file
-	 * changes the CWD, this will be the CWD for CliFM */
-	if (!workspaces[cur_ws].path) {
-		char cwd[PATH_MAX] = "";
-		if (getcwd(cwd, sizeof(cwd)) == NULL) {/* Avoid compiler warning */}
-
-		if (!*cwd || strlen(cwd) == 0) {
-			if (user_home) {
-				workspaces[cur_ws].path = savestring(user_home, strlen(user_home));
-			} else {
-				if (access("/", R_OK | X_OK) == -1) {
-					fprintf(stderr, "%s: /: %s\n", PROGRAM_NAME,
-					    strerror(errno));
-					exit(EXIT_FAILURE);
-				} else {
-					workspaces[cur_ws].path = savestring("/", 1);
-				}
-			}
-		} else {
-			workspaces[cur_ws].path = savestring(cwd, strlen(cwd));
-		}
-	}
+	prev_ws = cur_ws;
+	set_cur_workspace();
 
 	/* Make path the CWD */
-	/* If chdir(path) fails, set path to cwd, list files and print the
+	/* If chdir() fails, set path to CWD, list files and print the
 	 * error message. If no access to CWD either, exit */
 	if (xchdir(workspaces[cur_ws].path, NO_TITLE) == -1) {
 		_err('e', PRINT_PROMPT, "%s: chdir: '%s': %s\n", PROGRAM_NAME,
@@ -256,8 +277,8 @@ set_start_path(void)
 
 		char cwd[PATH_MAX] = "";
 		if (getcwd(cwd, sizeof(cwd)) == NULL) {
-			_err(0, NOPRINT_PROMPT, _("%s: Fatal error! Failed "
-					"retrieving current working directory\n"), PROGRAM_NAME);
+			_err(0, NOPRINT_PROMPT, _("%s: Fatal error! Failure "
+				"retrieving current working directory\n"), PROGRAM_NAME);
 			exit(EXIT_FAILURE);
 		}
 
@@ -267,7 +288,6 @@ set_start_path(void)
 	}
 
 	dir_changed = 1;
-
 	return EXIT_SUCCESS;
 }
 
@@ -281,9 +301,9 @@ get_data_dir(void)
 	char p[PATH_MAX];
 	snprintf(p, PATH_MAX, "%s/%s", STRINGIZE(CLIFM_DATADIR), PNL);
 	if (stat(p, &a) != -1) {
-		data_dir = (char *)xnmalloc(strlen(STRINGIZE(CLIFM_DATADIR)) + 1,
-		           sizeof(char));
+		data_dir = (char *)xnmalloc(strlen(STRINGIZE(CLIFM_DATADIR)) + 1, sizeof(char));
 		strcpy(data_dir, STRINGIZE(CLIFM_DATADIR));
+		return;
 	}
 #endif
 
@@ -303,12 +323,11 @@ get_data_dir(void)
 	for (i = 0; data_dirs[i]; i++) {
 		char tmp[PATH_MAX];
 		snprintf(tmp, PATH_MAX - 1, "%s/%s", data_dirs[i], PNL);
-		if (stat(tmp, &attr) == EXIT_SUCCESS) {
-			data_dir = (char *)xrealloc(data_dir, (strlen(data_dirs[i]) + 1)
-						* sizeof(char));
-			strcpy(data_dir, data_dirs[i]);
-			break;
-		}
+		if (stat(tmp, &attr) == -1)
+			continue;
+		data_dir = (char *)xrealloc(data_dir, (strlen(data_dirs[i]) + 1) * sizeof(char));
+		strcpy(data_dir, data_dirs[i]);
+		break;
 	}
 
 	return;
@@ -330,7 +349,7 @@ check_env_filter(void)
 	} else {
 		filter_rev = 0;
 	}
-	
+
 	_filter = savestring(p, strlen(p));
 }
 
@@ -367,37 +386,128 @@ get_own_pid(void)
 	return pid;
 }
 
-/* Retrieve user information and store in a user_t struct for later access */
+/* Return 1 is secure-env is enabled. Otherwise, return 0
+ * Used only at an early stage, where command line options haven't been
+ * parsed yet */
+static int
+is_secure_env(void)
+{
+	if (!argv_bk)
+		return 0;
+
+	size_t i;
+	for(i = 0; argv_bk[i]; i++) {
+		if (*argv_bk[i] == '-' && (strncmp(argv_bk[i], "--secure-env", 12) == 0))
+			return 1;
+	}
+
+	return 0;
+}
+
+/* Get user ID using id(1) shell command: GID if GROUP is one and UID otherwise */
+static int
+get_user_id(const int group)
+{
+	char file[PATH_MAX];
+	snprintf(file, PATH_MAX, "%s/idXXXXXX", *P_tmpdir ? P_tmpdir : "/tmp"); /* NOLINT */
+
+	int fd = mkstemp(file);
+	if (fd == -1) return (-1);
+
+	int stdout_bk = dup(STDOUT_FILENO); /* Save original stdout */
+
+	int r = dup2(fd, STDOUT_FILENO); /* Redirect stdout to the desired file */
+	close(fd);
+	if (r == -1) { unlink(file); return (-1); }
+
+	char *cmd[] = {"id", group == 1 ? "-g" : "-u", NULL};
+	launch_execve(cmd, FOREGROUND, E_NOSTDERR);
+
+	dup2(stdout_bk, STDOUT_FILENO); /* Restore original stdout */
+	close(stdout_bk);
+
+	FILE *fp = open_fstream_r(file, &fd);
+	if (!fp) { unlink(file); return (-1); }
+
+	char line[32];
+	if (fgets(line, (int)sizeof(line), fp) == NULL) {
+		close_fstream(fp, fd);
+		unlink(file);
+		return (-1);
+	}
+
+	close_fstream(fp, fd);
+	unlink(file);
+	return atoi(line);
+}
+
+/* Get user data from environment variables. Used only in case getpwuid() failed */
+static struct user_t
+get_user_env(void)
+{
+	struct user_t tmp_user;
+
+	/* If secure-env, do not fallback to environment variables */
+	int sec_env = is_secure_env();
+	_err('e', PRINT_PROMPT, "%s: getpwuid: %s\n", PROGRAM_NAME, strerror(errno));
+
+	tmp_user.uid = sec_env == 0 ? (uid_t)get_user_id(0) : (uid_t)-1;
+	tmp_user.gid = sec_env == 0 ? (gid_t)get_user_id(1) : (gid_t)-1;
+
+	char *t = sec_env == 0 ? getenv("HOME") : (char *)NULL;
+/*	size_t tlen = t ? strlen(t) : 0;
+	tmp_user.home = t ? savestring(t, strlen(t)) : (char *)NULL;
+	tmp_user.home_len = tlen; */
+
+	if (t) {
+		char *p = realpath(t, NULL);
+		char *h = p ? p : t;
+		tmp_user.home = savestring(h, strlen(h));
+		free(p);
+	} else {
+		tmp_user.home = (char *)NULL;
+	}
+
+	tmp_user.home_len = tmp_user.home ? strlen(tmp_user.home) : 0;
+
+	t = sec_env == 0 ? getenv("USER") : (char *)NULL;;
+	tmp_user.name = t ? savestring(t, strlen(t)) : (char *)NULL;
+
+	t = sec_env == 0 ? getenv("SHELL") : (char *)NULL;
+	tmp_user.shell = t ? savestring(t, strlen(t)) : (char *)NULL;
+
+	return tmp_user;
+}
+
+/* Retrieve user information and store it in a user_t struct for later access */
 struct user_t
 get_user(void)
 {
-	struct passwd *pw;
+	struct passwd *pw = (struct passwd *)NULL;
 	struct user_t tmp_user;
 
 	errno = 0;
 	pw = getpwuid(geteuid());
-	if (!pw) {
-		fprintf(stderr, "%s: getpwuid: %s\n", PROGRAM_NAME, strerror(errno));
-		exit(-1);
-	}
+	if (!pw) /* Fallback to environment variables (if not secure-env) */
+		return get_user_env();
 
 	tmp_user.uid = pw->pw_uid;
 	tmp_user.gid = pw->pw_gid;
-/*	char *p = getenv("HOME"); 
-	if (!p) */
-		tmp_user.home = savestring(pw->pw_dir, strlen(pw->pw_dir));
-/*	else
-		tmp_user.home = savestring(p, strlen(p)); */
 	tmp_user.name = savestring(pw->pw_name, strlen(pw->pw_name));
 	tmp_user.shell = savestring(pw->pw_shell, strlen(pw->pw_shell));
 
-	if (!tmp_user.home || !tmp_user.name || !tmp_user.shell) {
-		_err('e', NOPRINT_PROMPT, _("%s: Error retrieving user data\n"),
-			PROGRAM_NAME);
-		exit(-1);
+	/* Sometimes (FreeBSD for example) the home directory, as returned by the
+	 * passwd struct, might be a symlink, in which case we want to resolve it
+	 * See https://lists.freebsd.org/pipermail/freebsd-arm/2016-July/014404.html */
+	char *p = realpath(pw->pw_dir, NULL);
+	if (p) {
+		tmp_user.home = savestring(p, strlen(p));
+		free(p);
+	} else {
+		tmp_user.home = savestring(pw->pw_dir, strlen(pw->pw_dir));
 	}
 
-	tmp_user.home_len = strlen(tmp_user.home);
+	tmp_user.home_len = tmp_user.home ? strlen(tmp_user.home) : 0;
 	return tmp_user;
 }
 
@@ -422,13 +532,11 @@ check_tag(char *name)
 void
 load_tags(void)
 {
-	if (!tags_dir || !*tags_dir)
-		return;
+	if (!tags_dir || !*tags_dir) return;
 
 	struct dirent **t = (struct dirent **)NULL;
 	int i, n = scandir(tags_dir, &t, NULL, alphasort);
-	if (n == -1)
-		return;
+	if (n == -1) return;
 
 	if (n <= 2) {
 		for (i = 0; i < n; i++)
@@ -462,15 +570,17 @@ load_tags(void)
 	tags[tags_n] = (char *)NULL;
 }
 
-/* Reconstruct the jump database from database file */
+/* Reconstruct the jump database from the database file */
 void
 load_jumpdb(void)
 {
 	if (xargs.no_dirjump == 1 || !config_ok || !config_dir)
 		return;
 
-	char *jump_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
-	snprintf(jump_file, config_dir_len + 10, "%s/jump.cfm", config_dir);
+/*	char *jump_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
+	snprintf(jump_file, config_dir_len + 10, "%s/jump.cfm", config_dir); */
+	char *jump_file = (char *)xnmalloc(config_dir_len + 12, sizeof(char));
+	snprintf(jump_file, config_dir_len + 12, "%s/jump.clifm", config_dir);
 
 	int fd;
 	FILE *fp = open_fstream_r(jump_file, &fd);
@@ -707,10 +817,12 @@ load_bookmarks(void)
 		bookmarks[bm_n].name = savestring(line, strlen(line));
 
 		if (!*(++tmp)) {
-			bookmarks[bm_n++].path = (char *)NULL;
+			bookmarks[bm_n].path = (char *)NULL;
+			bm_n++;
 			continue;
 		} else {
-			bookmarks[bm_n++].path = savestring(tmp, strlen(tmp));
+			bookmarks[bm_n].path = savestring(tmp, strlen(tmp));
+			bm_n++;
 		}
 	}
 
@@ -783,10 +895,9 @@ load_actions(void)
 		if (!tmp)
 			continue;
 
-		/* Now copy left and right value of each action into the
-		 * actions struct */
+		/* Now copy left and right value of each action into the actions struct */
 		usr_actions = xrealloc(usr_actions, (size_t)(actions_n + 1)
-								* sizeof(struct actions_t));
+					* sizeof(struct actions_t));
 		usr_actions[actions_n].value = savestring(tmp + 1, strlen(tmp + 1));
 		*tmp = '\0';
 		usr_actions[actions_n].name = savestring(line, strlen(line));
@@ -811,7 +922,7 @@ reset_remotes_values(const size_t i)
 	remotes[i].mounted = 0;
 }
 
-/* Load remotes information from FILE */
+/* Load remotes information from REMOTES_FILE */
 int
 load_remotes(void)
 {
@@ -821,7 +932,7 @@ load_remotes(void)
 	int fd;
 	FILE *fp = open_fstream_r(remotes_file, &fd);
 	if (!fp) {
-		fprintf(stderr, "%s: %s\n", remotes_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s\n", remotes_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -881,7 +992,7 @@ load_remotes(void)
 							(ret_len + 1) * sizeof(char));
 			strcpy(remotes[n].desc, ret);
 		} else if (strncmp(line, "Mountpoint=", 11) == 0) {
-			char *tmp = (char *)NULL; 
+			char *tmp = (char *)NULL;
 			if (*ret == '~')
 				tmp = tilde_expand(ret);
 			remotes[n].mountpoint = (char *)xrealloc(remotes[n].mountpoint,
@@ -959,6 +1070,7 @@ unset_prompt_values(const size_t n)
 	prompts[n].regular = (char *)NULL;
 	prompts[n].warning = (char *)NULL;
 	prompts[n].notifications = DEF_PROMPT_NOTIF;
+	prompts[n].warning_prompt_enabled = DEF_WARNING_PROMPT;
 }
 
 static char *
@@ -968,8 +1080,10 @@ set_prompts_file(void)
 		return (char *)NULL;
 
 	struct stat a;
-	char *f = (char *)xnmalloc(strlen(config_dir_gral) + 13, sizeof(char));
-	sprintf(f, "%s/prompts.cfm", config_dir_gral);
+/*	char *f = (char *)xnmalloc(strlen(config_dir_gral) + 13, sizeof(char));
+	sprintf(f, "%s/prompts.cfm", config_dir_gral); */
+	char *f = (char *)xnmalloc(strlen(config_dir_gral) + 15, sizeof(char));
+	sprintf(f, "%s/prompts.clifm", config_dir_gral);
 
 	if (stat(f, &a) != -1 && S_ISREG(a.st_mode))
 		return f;
@@ -978,7 +1092,8 @@ set_prompts_file(void)
 		goto ERROR;
 
 	char t[PATH_MAX];
-	snprintf(t, sizeof(t), "%s/%s/prompts.cfm", data_dir, PNL);
+//	snprintf(t, sizeof(t), "%s/%s/prompts.cfm", data_dir, PNL);
+	snprintf(t, sizeof(t), "%s/%s/prompts.clifm", data_dir, PNL);
 	if (stat(t, &a) == -1 || !S_ISREG(a.st_mode))
 		goto ERROR;
 
@@ -1008,7 +1123,7 @@ load_prompts(void)
 	int fd;
 	FILE *fp = open_fstream_r(prompts_file, &fd);
 	if (!fp) {
-		fprintf(stderr, "%s: %s\n", prompts_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s\n", prompts_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -1080,6 +1195,16 @@ load_prompts(void)
 			continue;
 		}
 
+		if (strncmp(line, "EnableWarningPrompt=", 20) == 0) {
+			if (*ret == 't' && strcmp(ret, "true") == 0)
+				prompts[n].warning_prompt_enabled = 1;
+			else if (*ret == 'f' && strcmp(ret, "false") == 0)
+				prompts[n].warning_prompt_enabled = 0;
+			else
+				prompts[n].warning_prompt_enabled = DEF_WARNING_PROMPT;
+			continue;
+		}
+
 		if (strncmp(line, "WarningPrompt=", 14) == 0) {
 			prompts[n].warning = (char *)xrealloc(prompts[n].warning,
 								(ret_len + 1) * sizeof(char));
@@ -1107,17 +1232,18 @@ open_reg_exit(char *filename, int url)
 {
 	char *homedir = getenv("HOME");
 	if (!homedir) {
-		fprintf(stderr, "%s: Could not retrieve the home directory\n",
-				PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: Could not retrieve the home directory\n", PROGRAM_NAME);
 		exit(EXIT_FAILURE);
 	}
 
 	tmp_dir = savestring(P_tmpdir, P_tmpdir_len);
 
 	size_t mime_file_len = strlen(homedir) + (alt_profile
-					? strlen(alt_profile) : 7) + 38;
+//					? strlen(alt_profile) : 7) + 38;
+					? strlen(alt_profile) : 7) + 40;
 	mime_file = (char *)xnmalloc(mime_file_len, sizeof(char));
-	sprintf(mime_file, "%s/.config/clifm/profiles/%s/mimelist.cfm",
+//	sprintf(mime_file, "%s/.config/clifm/profiles/%s/mimelist.cfm",
+	sprintf(mime_file, "%s/.config/clifm/profiles/%s/mimelist.clifm",
 			homedir, alt_profile ? alt_profile : "default");
 
 	if (path_n == 0)
@@ -1189,8 +1315,8 @@ resolve_positional_param(char *file)
 	if (IS_FILE_URI(_path)) {
 		_path = file + 7;
 		if (stat(_path, &attr) == -1) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, _exp_path,
-				strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+				_exp_path, strerror(errno));
 			free(_exp_path);
 			exit(errno);
 		}
@@ -1198,15 +1324,15 @@ resolve_positional_param(char *file)
 		url = 1;
 	} else {
 		if (stat(_exp_path, &attr) == -1) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, _exp_path,
-				strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+				_exp_path, strerror(errno));
 			free(_exp_path);
 			exit(errno);
 		}
 
 		if (!S_ISDIR(attr.st_mode)) {
-			fprintf(stderr, "%s: %s: %s\n",	PROGRAM_NAME, _exp_path,
-				strerror(ENOTDIR));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+				_exp_path, strerror(ENOTDIR));
 			free(_exp_path);
 			exit(ENOTDIR);
 		}
@@ -1227,12 +1353,11 @@ resolve_positional_param(char *file)
 void
 external_arguments(int argc, char **argv)
 {
-	/* Disable automatic error messages to be able to handle them
-	 * myself via the '?' case in the switch */
+	/* Disable automatic error messages to be able to handle them ourselves
+	 * via the '?' case in the switch */
 	opterr = optind = 0;
 
-	/* Link long (--option) and short options (-o) for the getopt_long
-	 * function */
+	/* Link long (--option) and short options (-o) for the getopt_long function */
 	static struct option longopts[] = {
 	    {"no-hidden", no_argument, 0, 'a'},
 	    {"show-hidden", no_argument, 0, 'A'},
@@ -1240,8 +1365,9 @@ external_arguments(int argc, char **argv)
 	    {"config-file", required_argument, 0, 'c'},
 	    {"config-dir", required_argument, 0, 'D'},
 	    {"no-eln", no_argument, 0, 'e'},
-	    {"no-folders-first", no_argument, 0, 'f'},
-	    {"folders-first", no_argument, 0, 'F'},
+	    {"eln-use-workspace-color", no_argument, 0, 'E'},
+	    {"no-dirs-first", no_argument, 0, 'f'},
+	    {"dirs-first", no_argument, 0, 'F'},
 	    {"pager", no_argument, 0, 'g'},
 	    {"no-pager", no_argument, 0, 'G'},
 	    {"help", no_argument, 0, 'h'},
@@ -1256,6 +1382,7 @@ external_arguments(int argc, char **argv)
 	    {"autols", no_argument, 0, 'O'},
 	    {"path", required_argument, 0, 'p'},
 	    {"profile", required_argument, 0, 'P'},
+	    {"no-refresh-on-emtpy-line", no_argument, 0, 'r'},
 	    {"splash", no_argument, 0, 's'},
 	    {"stealth-mode", no_argument, 0, 'S'},
 	    {"disk-usage-analyzer", no_argument, 0, 't'},
@@ -1263,6 +1390,7 @@ external_arguments(int argc, char **argv)
 	    {"no-unicode", no_argument, 0, 'u'},
 	    {"version", no_argument, 0, 'v'},
 	    {"workspace", required_argument, 0, 'w'},
+	    {"no-toggle-workspaces", no_argument, 0, 'W'},
 	    {"no-ext-cmds", no_argument, 0, 'x'},
 	    {"light-mode", no_argument, 0, 'y'},
 	    {"sort", required_argument, 0, 'z'},
@@ -1309,7 +1437,7 @@ external_arguments(int argc, char **argv)
 	    {"no-follow-symlink", no_argument, 0, 40},
 		{"no-control-d-exit", no_argument, 0, 41},
 		{"int-vars", no_argument, 0, 42},
-		{"std-tab-comp", no_argument, 0, 43},
+		{"stdtab", no_argument, 0, 43},
 		{"no-warning-prompt", no_argument, 0, 44},
 		{"mnt-udisks2", no_argument, 0, 45},
 		{"secure-env", no_argument, 0, 46},
@@ -1321,26 +1449,35 @@ external_arguments(int argc, char **argv)
 		{"fzytab", no_argument, 0, 52},
 		{"no-refresh-on-resize", no_argument, 0, 53},
 		{"bell", required_argument, 0, 54},
+		{"fuzzy-match", no_argument, 0, 55},
+		{"smenutab", no_argument, 0, 56},
+		{"virtual-dir-full-paths", no_argument, 0, 57},
+		{"virtual-dir", required_argument, 0, 58},
+		{"desktop-notifications", no_argument, 0, 59},
 #ifdef __linux__
-		{"si", no_argument, 0, 55},
+		{"si", no_argument, 0, 60},
 #endif
 	    {0, 0, 0, 0}
 	};
 
 	/* Increment whenever a new (only) long option is added */
-	int long_opts = 45;
+#ifdef __linux__
+	int long_opts = 60;
+#else
+	int long_opts = 59;
+#endif
 	int optc;
-	/* Variables to store arguments to options (-c, -p and -P) */
+	/* Variables to store arguments to options */
 	char *path_value = (char *)NULL,
 		 *alt_profile_value = (char *)NULL,
 	     *alt_dir_value = (char *)NULL,
 	     *config_value = (char *)NULL,
 	     *kbinds_value = (char *)NULL,
+		 *virtual_dir_value = (char *)NULL,
 	     *bm_value = (char *)NULL;
 
 	while ((optc = getopt_long(argc, argv,
-		    "+aAb:c:D:efFgGhHiIk:lLmoOp:P:sStUuvw:xyz:", longopts,
-		    (int *)0)) != EOF) {
+		    "+aAb:c:D:eEfFgGhHiIk:lLmoOp:P:rsStUuvw:Wxyz:", longopts, (int *)0)) != EOF) {
 		/* ':' and '::' in the short options string means 'required' and
 		 * 'optional argument' respectivelly. Thus, 'p' and 'P' require
 		 * an argument here. The plus char (+) tells getopt to stop
@@ -1445,8 +1582,8 @@ external_arguments(int argc, char **argv)
 			if (IS_FILE_URI(_path)) {
 				_path = optarg + 7;
 				if (stat(_path, &attr) == -1) {
-					fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, optarg,
-						strerror(errno));
+					_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+						optarg, strerror(errno));
 					exit(errno);
 				}
 				url = 0;
@@ -1456,8 +1593,8 @@ external_arguments(int argc, char **argv)
 			if (is_url(_path) == EXIT_FAILURE) {
 				url = 0;
 				if (stat(_path, &attr) == -1) {
-					fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, _path,
-						strerror(errno));
+					_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+						_path, strerror(errno));
 					exit(errno);
 				}
 			}
@@ -1505,7 +1642,7 @@ RUN:
 #ifndef _NO_FZF
 			xargs.fzftab = 0;
 #endif /* !_NO_FZF */
-			fzftab = 0;
+			fzftab = 0; tabmode = STD_TAB;
 			break;
 /*			fprintf(stderr, _("%s: fzftab: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
 			exit(EXIT_FAILURE); */
@@ -1523,10 +1660,11 @@ RUN:
 			break;
 		case 48: xargs.secure_cmds = 1; break;
 		case 49: xargs.full_dir_size = full_dir_size = 1; break;
-		case 50: xargs.apparent_size = 1; break;
+		case 50: xargs.apparent_size = apparent_size = 1; break;
 		case 51: xargs.history = 0; break;
 #ifndef _NO_FZF
-		case 52: xargs.fzytab = 1; fzftab = 1; break;
+		case 52:
+			xargs.fzytab = 1; fzftab = 1; tabmode = FZY_TAB; break;
 #else
 		case 52:
 			fprintf(stderr, _("%s: fzytab: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
@@ -1543,18 +1681,32 @@ RUN:
 			}
 			xargs.bell_style = a; break;
 			}
-#ifdef __linux__
-		case 55: xargs.si = 1; break;
+		case 55: xargs.fuzzy_match = 1; break;
+#ifndef _NO_FZF
+		case 56: xargs.smenutab = 1; fzftab = 1; tabmode = SMENU_TAB; break;
+#else
+		case 56:
+			fprintf(stderr, _("%s: smenu: %s\n"), PROGRAM_NAME, _(NOT_AVAILABLE));
+			exit(EXIT_FAILURE);
 #endif
-		case 'a':
-			flags &= ~HIDDEN; /* Remove HIDDEN from 'flags' */
-			show_hidden = xargs.hidden = 0;
+		case 57: xargs.virtual_dir_full_paths = 1; break;
+		case 58:
+			if (optarg && *optarg && *optarg == '/')
+				virtual_dir_value = optarg;
+			else {
+				fprintf(stderr, "%s: --virtual-dir: Absolute path "
+					"is required as parameter\n", PROGRAM_NAME);
+				exit(EXIT_FAILURE);
+			}
 			break;
 
-		case 'A':
-			flags |= HIDDEN; /* Add HIDDEN to 'flags' */
-			show_hidden = xargs.hidden = 1;
-			break;
+		case 59: xargs.desktop_notifications = desktop_notifications = 1; break;
+
+#ifdef __linux__
+		case 60: xargs.si = 1; break;
+#endif
+		case 'a': show_hidden = xargs.hidden = 0; break;
+		case 'A': show_hidden = xargs.hidden = 1; break;
 
 		case 'b':
 			xargs.bm_file = 1;
@@ -1567,52 +1719,27 @@ RUN:
 			break;
 
 		case 'D': alt_dir_value = optarg; break;
-		case 'e': xargs.noeln = no_eln = 1;	break;
-
-		case 'f':
-			flags &= ~FOLDERS_FIRST;
-			list_folders_first = xargs.ffirst = 0;
-			break;
-
-		case 'F':
-			flags |= FOLDERS_FIRST;
-			list_folders_first = xargs.ffirst = 1;
-			break;
-
+		case 'e': xargs.noeln = no_eln = 1; break;
+		case 'E': xargs.eln_use_workspace_color = 1; break;
+		case 'f': list_dirs_first = xargs.dirs_first = 0; break;
+		case 'F': list_dirs_first = xargs.dirs_first = 1; break;
 		case 'g': pager = xargs.pager = 1; break;
 		case 'G': pager = xargs.pager = 0; break;
 
 		case 'h':
-			flags |= HELP;
 			help_function();
 			exit(EXIT_SUCCESS);
 
 		case 'H': xargs.horizontal_list = 1; listing_mode = HORLIST; break;
 
-		case 'i':
-			flags &= ~CASE_SENS;
-			case_sensitive = xargs.sensitive = 0;
-			break;
-
-		case 'I':
-			flags |= CASE_SENS;
-			case_sensitive = xargs.sensitive = 1;
-			break;
-
+		case 'i': case_sensitive = xargs.sensitive = 0; break;
+		case 'I': case_sensitive = xargs.sensitive = 1; break;
 		case 'k': kbinds_value = optarg; break;
 		case 'l': long_view = xargs.longview = 0; break;
 		case 'L': long_view = xargs.longview = 1; break;
 		case 'm': dirhist_map = xargs.dirmap = 1; break;
-
-		case 'o':
-			flags &= ~AUTOLS;
-			autols = xargs.autols = 0;
-			break;
-
-		case 'O':
-			flags |= AUTOLS;
-			autols = xargs.autols = 1;
-			break;
+		case 'o': autols = xargs.autols = 0; break;
+		case 'O': autols = xargs.autols = 1; break;
 
 		case 'p':
 			flags |= START_PATH;
@@ -1625,11 +1752,8 @@ RUN:
 			alt_profile_value = optarg;
 			break;
 
-		case 's':
-			flags |= SPLASH;
-			splash_screen = xargs.splash = 1;
-			break;
-
+		case 'r': xargs.refresh_on_empty_line = 0; break;
+		case 's': splash_screen = xargs.splash = 1; break;
 		case 'S': xargs.stealth_mode = 1; break;
 		case 't': xargs.disk_usage_analyzer = 1; break;
 		case 'u': unicode = xargs.unicode = 0; break;
@@ -1647,9 +1771,9 @@ RUN:
 				cur_ws = iopt - 1;
 		} break;
 
+		case 'W': xargs.toggle_workspaces = 0; break;
 		case 'x': ext_cmd_ok = xargs.ext = 0; break;
 		case 'y': light_mode = xargs.light = 1; break;
-
 		case 'z': set_sort(optarg); break;
 
 		case '?': /* If some unrecognized option was found... */
@@ -1666,9 +1790,10 @@ RUN:
 			case 'w': /* fallthrough */
 			case 'z':
 				fprintf(stderr, _("%s: option requires an argument -- "
-						  "'%c'\nTry '%s --help' for more information.\n"),
+					"'%c'\nTry '%s --help' for more information.\n"),
 				    PROGRAM_NAME, optopt, PNL);
 				exit(EXIT_FAILURE);
+				break;
 			default: break;
 			}
 
@@ -1713,13 +1838,18 @@ RUN:
 
 		if (access(bm_value, R_OK) == -1) {
 			_err('e', PRINT_PROMPT, _("%s: %s: %s\n"
-						  "Falling back to the default bookmarks file\n"),
+				"Falling back to the default bookmarks file\n"),
 			    PROGRAM_NAME, bm_value, strerror(errno));
 		} else {
 			alt_bm_file = savestring(bm_value, strlen(bm_value));
 			_err('n', PRINT_PROMPT, _("%s: Loaded alternative "
-						  "bookmarks file\n"), PROGRAM_NAME);
+				"bookmarks file\n"), PROGRAM_NAME);
 		}
+	}
+
+	if (virtual_dir_value) {
+		stdin_tmp_dir = savestring(virtual_dir_value, strlen(virtual_dir_value));
+		setenv("CLIFM_VIRTUAL_DIR", stdin_tmp_dir, 1);
 	}
 
 	if (alt_dir_value) {
@@ -1737,7 +1867,7 @@ RUN:
 			int ret = launch_execve(tmp_cmd, FOREGROUND, E_NOSTDERR);
 			if (ret != EXIT_SUCCESS) {
 				_err('e', PRINT_PROMPT, _("%s: %s: Cannot create directory "
-				"(error %d)\nFalling back to default configuration directory\n"),
+					"(error %d)\nFalling back to default configuration directory\n"),
 					PROGRAM_NAME, alt_dir_value, ret);
 				dir_ok = 0;
 			}
@@ -1751,7 +1881,7 @@ RUN:
 			}
 		} else {
 			alt_config_dir = savestring(alt_dir_value, strlen(alt_dir_value));
-			_err(0, PRINT_PROMPT, _("%s: %s: Using alternative "
+			_err(ERR_NO_LOG, PRINT_PROMPT, _("%s: %s: Using alternative "
 				"configuration directory\n"), PROGRAM_NAME, alt_config_dir);
 		}
 
@@ -1800,9 +1930,8 @@ RUN:
 		} */
 
 		if (access(config_value, R_OK) == -1) {
-			_err('e', PRINT_PROMPT, _("%s: %s: %s\n"
-				"Falling back to default\n"), PROGRAM_NAME,
-			    config_value, strerror(errno));
+			_err('e', PRINT_PROMPT, _("%s: %s: %s\nFalling back to default\n"),
+				PROGRAM_NAME, config_value, strerror(errno));
 			xargs.config = -1;
 		} else {
 			alt_config_file = savestring(config_value, strlen(config_value));
@@ -1827,14 +1956,13 @@ RUN:
 				*_tmp = '\0';
 				char *p = realpath(path_value, _tmp);
 				if (!p) {
-					fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME,
+					_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
 						path_value, strerror(errno));
 					exit(errno);
 				}
 				xstrsncpy(path_tmp, p, PATH_MAX);
 			} else {
-				snprintf(path_tmp, PATH_MAX - 1, "%s/%s", getenv("PWD"),
-					path_value);
+				snprintf(path_tmp, PATH_MAX - 1, "%s/%s", getenv("PWD"), path_value);
 			}
 		} else {
 			xstrsncpy(path_tmp, path_value, PATH_MAX);
@@ -1849,8 +1977,8 @@ RUN:
 			workspaces[cur_ws].path = savestring(path_tmp, strlen(path_tmp));
 		} else { /* Error changing directory */
 			if (xargs.list_and_quit == 1) {
-				fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME,
-				    path_tmp, strerror(errno));
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+					path_tmp, strerror(errno));
 				exit(EXIT_FAILURE);
 			}
 
@@ -1892,18 +2020,22 @@ unset_xargs(void)
 	xargs.config = UNSET;
 	xargs.control_d_exits = UNSET;
 	xargs.cwd_in_title = UNSET;
+	xargs.desktop_notifications = UNSET;
 	xargs.dirmap = UNSET;
 	xargs.disk_usage = UNSET;
 	xargs.disk_usage_analyzer = UNSET;
+	xargs.eln_use_workspace_color = UNSET;
 	xargs.expand_bookmarks = UNSET;
 	xargs.ext = UNSET;
-	xargs.ffirst = UNSET;
+	xargs.dirs_first = UNSET;
 	xargs.files_counter = UNSET;
 	xargs.follow_symlinks = UNSET;
 	xargs.full_dir_size = UNSET;
+	xargs.fuzzy_match = UNSET;
 #ifndef _NO_FZF
 	xargs.fzftab = UNSET;
 	xargs.fzytab = UNSET;
+	xargs.smenutab = UNSET;
 #endif
 	xargs.hidden = UNSET;
 #ifndef _NO_HIGHLIGHT
@@ -1930,6 +2062,7 @@ unset_xargs(void)
 	xargs.pager = UNSET;
 	xargs.path = UNSET;
 	xargs.printsel = UNSET;
+	xargs.refresh_on_empty_line = UNSET;
 	xargs.refresh_on_resize = UNSET;
 	xargs.restore_last_path = UNSET;
 	xargs.rl_vi_mode = UNSET;
@@ -1947,10 +2080,12 @@ unset_xargs(void)
 	xargs.suggestions = UNSET;
 #endif */
 	xargs.tips = UNSET;
+	xargs.toggle_workspaces = UNSET;
 #ifndef _NO_TRASH
 	xargs.trasrm = UNSET;
 #endif
 	xargs.unicode = UNSET;
+	xargs.virtual_dir_full_paths = UNSET;
 	xargs.welcome_message = UNSET;
 	xargs.warning_prompt = UNSET;
 }
@@ -1964,7 +2099,7 @@ void
 init_shell(void)
 {
 	if (!isatty(STDIN_FILENO)) { /* Shell is not interactive */
-		handle_stdin();
+		exit_code = handle_stdin();
 		return;
 	}
 
@@ -1975,7 +2110,7 @@ init_shell(void)
 	return;
 }
 
-/* Get current entries in the Selection Box, if any. */
+/* Get current entries in the Selection Box, if any */
 int
 get_sel_files(void)
 {
@@ -1999,8 +2134,7 @@ get_sel_files(void)
 		return EXIT_FAILURE;
 
 	struct stat a;
-	/* Since this file contains only paths, we can be sure no line
-	 * length will be larger than PATH_MAX */
+	/* Since this file contains only paths, PATH_MAX should be enough */
 	char line[PATH_MAX];
 	while (fgets(line, (int)sizeof(line), fp) != NULL) {
 		size_t len = strlen(line);
@@ -2047,6 +2181,8 @@ get_sel_files(void)
 	return EXIT_SUCCESS;
 }
 
+/* Store each path in CDPATH env variable into an array (CDPATHS)
+ * Returns the number of paths found or zero if none */
 size_t
 get_cdpath(void)
 {
@@ -2097,33 +2233,31 @@ get_path_env(void)
 	char *ptr = (char *)NULL;
 	int malloced_ptr = 0;
 
-	/* If running in a sanitized environment, get PATH value from
-	 * a secure source */
+	/* If running in a sanitized environment, or PATH cannot be retrieved for
+	 * whatever reason, get PATH value from a secure source */
 	if (xargs.secure_cmds == 1 || xargs.secure_env == 1
-	|| xargs.secure_env_full == 1) {
+	|| xargs.secure_env_full == 1 || !(ptr = getenv("PATH")) || !*ptr) {
 		malloced_ptr = 1;
 #ifdef _PATH_STDPATH
 		ptr = savestring(_PATH_STDPATH, strlen(_PATH_STDPATH));
 #else
-		size_t n = confstr(_CS_PATH, NULL, 0); /* Get value's size */
-		char *p = (char *)xnmalloc(n, sizeof(char)); /* Allocate space */
-		confstr(_CS_PATH, p, n);               /* Get value */
+		size_t s = confstr(_CS_PATH, NULL, 0); /* Get value's size */
+		char *p = (char *)xnmalloc(s, sizeof(char)); /* Allocate space */
+		confstr(_CS_PATH, p, s);               /* Get value */
 		ptr = p;
 #endif
-	} else {
-		ptr = getenv("PATH");
 	}
 
 	if (!ptr)
 		return 0;
 
 	if (!*ptr) {
-		if (malloced_ptr)
+		if (malloced_ptr == 1)
 			free(ptr);
 		return 0;
 	}
 
-	if (malloced_ptr)
+	if (malloced_ptr == 1)
 		path_tmp = ptr;
 	else
 		path_tmp = savestring(ptr, strlen(ptr));
@@ -2273,7 +2407,7 @@ get_path_programs(void)
 	int *cmd_n = (int *)0;
 	struct dirent ***commands_bin = (struct dirent ***)NULL;
 
-	if (ext_cmd_ok) {
+	if (ext_cmd_ok == 1) {
 		char cwd[PATH_MAX];
 		if (getcwd(cwd, sizeof(cwd)) == NULL) {/* Avoid compiler warning */}
 
@@ -2288,8 +2422,7 @@ get_path_programs(void)
 			}
 
 			cmd_n[i] = scandir(paths[i], &commands_bin[i],
-						light_mode ? NULL : skip_nonexec, xalphasort);
-//						NULL, xalphasort);
+					light_mode ? NULL : skip_nonexec, xalphasort);
 			/* If paths[i] directory does not exist, scandir returns -1.
 			 * Fedora, for example, adds $HOME/bin and $HOME/.local/bin to
 			 * PATH disregarding if they exist or not. If paths[i] dir is
@@ -2301,21 +2434,19 @@ get_path_programs(void)
 	}
 
 	/* Add internal commands */
-	size_t internal_cmd_n = 0;
-	while (internal_cmds[internal_cmd_n])
-		internal_cmd_n++;
+	for (internal_cmds_n = 0; internal_cmds[internal_cmds_n].name; internal_cmds_n++);
 
-	bin_commands = (char **)xnmalloc((size_t)total_cmd + internal_cmd_n +
+	bin_commands = (char **)xnmalloc((size_t)total_cmd + internal_cmds_n +
 			     aliases_n + actions_n + 2, sizeof(char *));
 
-	i = (int)internal_cmd_n;
+	i = (int)internal_cmds_n;
 	while (--i >= 0) {
-		bin_commands[l] = savestring(internal_cmds[i], strlen(internal_cmds[i]));
+		bin_commands[l] = savestring(internal_cmds[i].name, internal_cmds[i].len);
 		l++;
 	}
 
 	/* Now add aliases, if any */
-	if (aliases_n) {
+	if (aliases_n > 0) {
 		i = (int)aliases_n;
 		while (--i >= 0) {
 			bin_commands[l] = savestring(aliases[i].name, strlen(aliases[i].name));
@@ -2324,7 +2455,7 @@ get_path_programs(void)
 	}
 
 	/* And user defined actions too, if any */
-	if (actions_n) {
+	if (actions_n > 0) {
 		i = (int)actions_n;
 		while (--i >= 0) {
 			bin_commands[l] = savestring(usr_actions[i].name, strlen(usr_actions[i].name));
@@ -2332,7 +2463,7 @@ get_path_programs(void)
 		}
 	}
 
-	if (ext_cmd_ok && total_cmd) {
+	if (ext_cmd_ok == 1 && total_cmd > 0) {
 		/* And finally, add commands in PATH */
 		i = (int)path_n;
 		while (--i >= 0) {
@@ -2565,6 +2696,36 @@ get_prompt_cmds(void)
 void
 check_options(void)
 {
+	if (desktop_notifications == UNSET) {
+		if (xargs.desktop_notifications == UNSET)
+			desktop_notifications = DEF_DESKTOP_NOTIFICATIONS;
+		else
+			desktop_notifications = xargs.desktop_notifications;
+	}
+
+	if (!*prop_fields_str) {
+		xstrsncpy(prop_fields_str, DEF_PROP_FIELDS, PROP_FIELDS_SIZE);
+		set_prop_fields(prop_fields_str);
+	}
+
+	if (xargs.toggle_workspaces == UNSET)
+		xargs.toggle_workspaces = DEF_TOGGLE_WORKSPACES;
+
+	if (search_strategy == UNSET)
+		search_strategy = DEF_SEARCH_STRATEGY;
+
+	if (xargs.eln_use_workspace_color == UNSET)
+		xargs.eln_use_workspace_color = DEF_ELN_USE_WORKSPACE_COLOR;
+
+	if (xargs.refresh_on_empty_line == UNSET)
+		xargs.refresh_on_empty_line = DEF_REFRESH_ON_EMPTY_LINE;
+
+	if (print_removed_files == UNSET)
+		print_removed_files = DEF_PRINT_REMOVED_FILES;
+
+	if (xargs.fuzzy_match == UNSET)
+		xargs.fuzzy_match = DEF_FUZZY_MATCH;
+
 	if (xargs.bell_style == UNSET)
 		bell = DEF_BELL_STYLE;
 	else
@@ -2589,6 +2750,9 @@ check_options(void)
 	if (!fzftab_options)
 		fzftab_options = savestring(DEF_FZFTAB_OPTIONS, strlen(DEF_FZFTAB_OPTIONS));
 
+	smenutab_options_env = xargs.secure_env_full != 1
+		? getenv("CLIFM_SMENU_OPTIONS") : (char *)NULL;
+
 	if (!wprompt_str) {
 		if (colorize == 1)
 			wprompt_str = savestring(DEF_WPROMPT_STR, strlen(DEF_WPROMPT_STR));
@@ -2598,9 +2762,6 @@ check_options(void)
 	}
 
 	/* Do no override command line options */
-	if (xargs.apparent_size == UNSET)
-		xargs.apparent_size = DEF_APPARENT_SIZE;
-
 	if (xargs.cwd_in_title == UNSET)
 		xargs.cwd_in_title = DEF_CWD_IN_TITLE;
 
@@ -2666,6 +2827,13 @@ check_options(void)
 # endif /* __NetBSD__ */
 #endif /* !_NO_HIGHLIGHT */
 
+	if (apparent_size == UNSET) {
+		if (xargs.apparent_size == UNSET)
+			apparent_size = DEF_APPARENT_SIZE;
+		else
+			apparent_size = xargs.apparent_size;
+	}
+
 	if (full_dir_size == UNSET) {
 		if (xargs.full_dir_size == UNSET)
 			full_dir_size = DEF_FULL_DIR_SIZE;
@@ -2693,12 +2861,23 @@ check_options(void)
 			/* This flag will be true only when reloading the config file,
 			 * because the check for the fzf binary is made at startup AFTER
 			 * reading the config file (check_third_party_cmds() in checks.c) */
-			if (flags & FZF_BIN_OK)
+			if (finder_flags & FZF_BIN_OK)
 				fzftab = 1;
 		} else {
 			fzftab = xargs.fzftab;
 		}
+
+		if (xargs.fzytab == 1)
+			tabmode = FZY_TAB;
+		else if (xargs.fzftab == 1)
+			tabmode = FZF_TAB;
+		else if (xargs.smenutab == 1)
+			tabmode = SMENU_TAB;
+		else
+			tabmode = STD_TAB;
 	}
+#else
+	tabmode = STD_TAB;
 #endif
 
 #ifndef _NO_ICONS
@@ -2852,11 +3031,11 @@ check_options(void)
 			clear_screen = xargs.clear_screen;
 	}
 
-	if (list_folders_first == UNSET) {
-		if (xargs.ffirst == UNSET)
-			list_folders_first = DEF_LIST_FOLDERS_FIRST;
+	if (list_dirs_first == UNSET) {
+		if (xargs.dirs_first == UNSET)
+			list_dirs_first = DEF_LIST_DIRS_FIRST;
 		else
-			list_folders_first = xargs.ffirst;
+			list_dirs_first = xargs.dirs_first;
 	}
 
 	if (autols == UNSET) {
@@ -2886,6 +3065,9 @@ check_options(void)
 		else
 			logs_enabled = xargs.logs;
 	}
+
+	if (log_cmds == UNSET)
+		log_cmds = DEF_LOG_CMDS;
 
 	if (light_mode == UNSET) {
 		if (xargs.light == UNSET)
@@ -3002,16 +3184,13 @@ check_options(void)
 		term = savestring(DEFAULT_TERM_CMD, strlen(DEFAULT_TERM_CMD));
 
 	if (!encoded_prompt) {
-		if (colorize == 1)
-			encoded_prompt = savestring(DEFAULT_PROMPT, strlen(DEFAULT_PROMPT));
-		else
-			encoded_prompt = savestring(DEFAULT_PROMPT_NO_COLOR,
-							strlen(DEFAULT_PROMPT_NO_COLOR));
+		char *t = colorize == 1 ? DEFAULT_PROMPT : DEFAULT_PROMPT_NO_COLOR;
+		encoded_prompt = savestring(t, strlen(t));
 	}
 
 	if ((xargs.stealth_mode == 1 || home_ok == 0 ||
 	config_ok == 0 || !config_file) && !*div_line)
-		strncpy(div_line, DEF_DIV_LINE, sizeof(div_line));
+		xstrsncpy(div_line, DEF_DIV_LINE, sizeof(div_line));
 
 	if (xargs.stealth_mode == 1 && !opener) {
 		/* Since in stealth mode we have no access to the config file, we cannot

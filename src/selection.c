@@ -54,12 +54,15 @@
 #include "messages.h"
 #include "file_operations.h"
 #include "init.h"
+/*
+char **new_selections = (char **)NULL;
+size_t new_seln = 0; */
 
 /* Save selected elements into a tmp file. Returns 1 if success and 0
  * if error. This function allows the user to work with multiple
  * instances of the program: he/she can select some files in the
  * first instance and then execute a second one to operate on those
- * files as he/she whises. */
+ * files as he/she wishes. */
 int
 save_sel(void)
 {
@@ -68,8 +71,7 @@ save_sel(void)
 
 	if (sel_n == 0) {
 		if (unlink(sel_file) == -1) {
-			fprintf(stderr, "%s: sel: %s: %s\n", PROGRAM_NAME,
-			    sel_file, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n",	sel_file, strerror(errno));
 			return EXIT_FAILURE;
 		}
 		return EXIT_SUCCESS;
@@ -77,8 +79,7 @@ save_sel(void)
 
 	FILE *fp = fopen(sel_file, "w");
 	if (!fp) {
-		_err(0, NOPRINT_PROMPT, "%s: sel: %s: %s\n", PROGRAM_NAME,
-		    sel_file, strerror(errno));
+		_err(0, NOPRINT_PROMPT, "sel: %s: %s\n", sel_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -100,10 +101,10 @@ select_file(char *file)
 
 	int exists = 0, new_sel = 0, j;
 	size_t flen = strlen(file);
-	if (file[flen - 1] == '/')
+	if (flen > 1 && file[flen - 1] == '/')
 		file[flen - 1] = '\0';
 
-	/* Check if the selected element is already in the selection box */
+	/* Check if FILE is already in the selection box */
 	j = (int)sel_n;
 	while (--j >= 0) {
 		if (*file == *sel_elements[j].name && strcmp(sel_elements[j].name, file) == 0) {
@@ -112,7 +113,7 @@ select_file(char *file)
 		}
 	}
 
-	if (!exists) {
+	if (exists == 0) {
 		sel_elements = (struct sel_t *)xrealloc(sel_elements, (sel_n + 2) * sizeof(struct sel_t));
 		sel_elements[sel_n].name = savestring(file, strlen(file));
 		sel_elements[sel_n].size = (off_t)UNSET;
@@ -120,9 +121,14 @@ select_file(char *file)
 		sel_elements[sel_n].name = (char *)NULL;
 		sel_elements[sel_n].size = (off_t)UNSET;
 
+/*		new_selections = (char **)xrealloc(new_selections, (new_seln + 2) * sizeof(char *));
+		new_selections[new_seln] = savestring(file, strlen(file));
+		new_seln++;
+		new_selections[new_seln] = (char *)NULL; */
+
 		new_sel++;
 	} else {
-		fprintf(stderr, _("%s: sel: %s: Already selected\n"), PROGRAM_NAME, file);
+		fprintf(stderr, _("sel: %s: Already selected\n"), file);
 	}
 
 	return new_sel;
@@ -186,8 +192,7 @@ sel_glob(char *str, const char *sel_path, mode_t filetype)
 		} else {
 			ret = scandir(sel_path, &ent, skip_files, xalphasort);
 			if (ret == -1) {
-				fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME,
-				    sel_path, strerror(errno));
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", sel_path, strerror(errno));
 				globfree(&gbuf);
 				return (-1);
 			}
@@ -325,8 +330,7 @@ sel_regex(char *str, const char *sel_path, mode_t filetype)
 
 	regex_t regex;
 	if (regcomp(&regex, pattern, REG_NOSUB | REG_EXTENDED) != EXIT_SUCCESS) {
-		fprintf(stderr, _("%s: sel: %s: Invalid regular "
-				"expression\n"), PROGRAM_NAME, str);
+		fprintf(stderr, _("sel: %s: Invalid regular expression\n"), str);
 
 		regfree(&regex);
 		return (-1);
@@ -361,7 +365,7 @@ sel_regex(char *str, const char *sel_path, mode_t filetype)
 		int filesn = scandir(sel_path, &list, skip_files, xalphasort);
 
 		if (filesn == -1) {
-			fprintf(stderr, "sel: %s: %s\n", sel_path, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", sel_path, strerror(errno));
 			return (-1);
 		}
 
@@ -454,8 +458,7 @@ parse_sel_params(char ***args, int *ifiletype, mode_t *filetype, int *isel_path)
 		if (*(*args)[i] == '~') {
 			char *exp_path = tilde_expand((*args)[i]);
 			if (!exp_path) {
-				fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, (*args)[i],
-				    strerror(errno));
+				_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", (*args)[i], strerror(errno));
 				return (char *)NULL;
 			}
 
@@ -477,14 +480,14 @@ construct_sel_path(char *sel_path)
 	xstrsncpy(tmpdir, sel_path, (size_t)PATH_MAX);
 
 	if (*sel_path == '.' && realpath(sel_path, tmpdir) == NULL) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, sel_path, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n",	sel_path, strerror(errno));
 		return (char *)NULL;
 	}
 
 	if (*sel_path == '~') {
 		char *exp_path = tilde_expand(sel_path);
 		if (!exp_path) {
-			fprintf(stderr, _("%s: Error expanding path\n"), PROGRAM_NAME);
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, _("sel: Error expanding path\n"));
 			return (char *)NULL;
 		}
 		strcpy(tmpdir, exp_path);
@@ -523,13 +526,13 @@ check_sel_path(char **sel_path)
 		return (char *)NULL;
 
 	if (access(dir, X_OK) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, dir, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", dir, strerror(errno));
 		free(dir);
 		return (char *)NULL;
 	}
 
 	if (xchdir(dir, NO_TITLE) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, dir, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", dir, strerror(errno));
 		free(dir);
 		return (char *)NULL;
 	}
@@ -576,12 +579,15 @@ print_selected_files(void)
 	size_t t = tab_offset, i;
 	off_t total = 0;
 	tab_offset = 0;
+
+	flags |= IN_SELBOX_SCREEN;
 	for (i = 0; i < sel_n; i++) {
 		colors_list(sel_elements[i].name, (int)i + 1, NO_PAD, PRINT_NEWLINE);
 		off_t s = get_sel_file_size(i);
 		if (s != (off_t)-1)
 			total += s;
 	}
+	flags &= ~IN_SELBOX_SCREEN;
 	tab_offset = t;
 
 	putchar('\n');
@@ -620,18 +626,44 @@ is_sel_file_in_cwd(const int index)
 	return 0;
 } */
 
+/*
+static void
+print_new_selections(void)
+{
+	size_t i, wlen = workspaces[cur_ws].path ? strlen(workspaces[cur_ws].path) : 0;
+	size_t max = 10;
+
+	for (i = 0; new_selections[i]; i++) {
+		if (i == max)
+			printf("... (and %zu more)\n", new_seln - max);
+		else if (i < max) {
+			if (wlen > 0 && strlen(new_selections[i]) > wlen
+			&& strncmp(new_selections[i], workspaces[cur_ws].path, wlen) == 0
+			&& *(new_selections[i] + wlen + 1))
+				printf("%s\n", new_selections[i] + wlen + 1);
+			else
+				printf("%s\n", new_selections[i]);
+		}
+		free(new_selections[i]);
+	}
+
+	free(new_selections);
+	new_selections = (char **)NULL;
+	new_seln = 0;
+} */
+
 static int
 print_sel_results(const int new_sel, const char *sel_path, const char *pattern, const int err)
 {
 	if (new_sel > 0 && xargs.stealth_mode != 1 && sel_file
 	&& save_sel() != EXIT_SUCCESS) {
-		_err('e', PRINT_PROMPT, _("%s: Error writing selected files "
-			"into the selections file\n"), PROGRAM_NAME);
+		_err('e', PRINT_PROMPT, _("sel: Error writing selected files "
+			"into the selections file\n"));
 	}
 
 	if (sel_path && xchdir(workspaces[cur_ws].path, NO_TITLE) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, workspaces[cur_ws].path,
-		    strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n",
+			workspaces[cur_ws].path, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -645,6 +677,7 @@ print_sel_results(const int new_sel, const char *sel_path, const char *pattern, 
 
 	if (autols == 1 && err == 0)
 		reload_dirlist();
+//	print_new_selections();
 	print_reload_msg(_("%d file(s) selected\n"), new_sel);
 	print_reload_msg(_("%zu total selected file(s)\n"), sel_n);
 
@@ -696,7 +729,7 @@ select_filename(char *arg, char *dir, int *err)
 		char *tmp = construct_sel_filename(dir, name);
 		struct stat attr;
 		if (lstat(tmp, &attr) == -1) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, arg, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", arg, strerror(errno));
 			(*err)++;
 		} else {
 			int r = select_file(tmp);
@@ -710,7 +743,7 @@ select_filename(char *arg, char *dir, int *err)
 
 	struct stat a;
 	if (lstat(arg, &a) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, name, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n",	name, strerror(errno));
 		(*err)++;
 	} else {
 		int r = select_file(name);
@@ -740,8 +773,7 @@ select_pattern(char *arg, char *dir, mode_t filetype, int *err)
 int
 sel_function(char **args)
 {
-	if (!args)
-		return EXIT_FAILURE;
+	if (!args) return EXIT_FAILURE;
 
 	if (!args[1] || IS_HELP(args[1])) {
 		puts(_(SEL_USAGE));
@@ -749,7 +781,7 @@ sel_function(char **args)
 	}
 
 	mode_t filetype = 0;
-	int i, ifiletype = 0, isel_path = 0, new_sel = 0, err = 0;
+	int i, ifiletype = 0, isel_path = 0, new_sel = 0, err = 0, f = 0;
 
 	char *dir = (char *)NULL, *pattern = (char *)NULL;
 	char *sel_path = parse_sel_params(&args, &ifiletype, &filetype, &isel_path);
@@ -760,7 +792,7 @@ sel_function(char **args)
 	for (i = 1; args[i]; i++) {
 		if (i == ifiletype || i == isel_path)
 			continue;
-
+		f++;
 		if (check_regex(args[i]) == EXIT_SUCCESS) {
 			pattern = args[i];
 			if (*pattern == '!')
@@ -773,6 +805,8 @@ sel_function(char **args)
 			new_sel += select_pattern(args[i], dir, filetype, &err);
 	}
 
+	if (f == 0)
+		fprintf(stderr, "Missing parameter. Try 's --help'\n");
 	free(dir);
 	return print_sel_results(new_sel, sel_path, pattern, err);
 }
@@ -804,6 +838,7 @@ show_sel_files(void)
 	size_t t = tab_offset;
 	tab_offset = 0;
 
+	flags |= IN_SELBOX_SCREEN;
 	for (i = 0; i < sel_n; i++) {
 		/* if (pager && counter > (term_rows-2)) { */
 		if (pager && counter > (size_t)t_rows) {
@@ -839,7 +874,7 @@ show_sel_files(void)
 		if (s != (off_t)-1)
 			total += s;
 	}
-
+	flags &= ~IN_SELBOX_SCREEN;
 	tab_offset = t;
 
 	char *human_size = get_size_unit(total);
@@ -860,19 +895,18 @@ edit_selfile(void)
 	if (stat(sel_file, &attr) == -1)
 		goto ERROR;
 
-	time_t mtime_bfr = (time_t)attr.st_mtime;
+	time_t mtime_old = (time_t)attr.st_mtime;
 
 	if (open_file(sel_file) != EXIT_SUCCESS) {
-		fprintf(stderr, "%s: Could not open the selections file\n", PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: Could not open the selections file\n");
 		return EXIT_FAILURE;
 	}
 
-	/* Compare the new modification time to the stored one: if they
-	 * match, nothing was modified */
+	/* Compare new and old modification times: if they match, nothing was modified */
 	if (stat(sel_file, &attr) == -1)
 		goto ERROR;
 
-	if (mtime_bfr == (time_t)attr.st_mtime)
+	if (mtime_old == (time_t)attr.st_mtime)
 		return EXIT_SUCCESS;
 
 	int ret = get_sel_files();
@@ -882,25 +916,17 @@ edit_selfile(void)
 	return ret;
 
 ERROR:
-	fprintf(stderr, "sel: %s: %s\n", sel_file, strerror(errno));
+	_err(ERR_NO_STORE, NOPRINT_PROMPT, "sel: %s: %s\n", sel_file, strerror(errno));
 	return EXIT_FAILURE;
 }
 
 static int
-desel_entries(char **desel_elements, size_t desel_n, int all)
+desel_entries(char **desel_elements, size_t desel_n, int desel_screen)
 {
-	/* If a valid ELN and not asterisk... */
-	/* Store the full path of all the elements to be deselected in a new
-	 * array (desel_path). We need to do this because after the first
-	 * rearragement of the sel array, that is, after the removal of the
-	 * first element, the index of the next elements changed, and cannot
-	 * thereby be found by their index. The only way to find them is
-	 * comparing string by string */
 	char **desel_path = (char **)NULL;
-
 	int i = (int)desel_n;
 
-	if (all == 0) {
+	if (desel_screen == 1) { /* Coming from the deselect screen */
 		desel_path = (char **)xnmalloc(desel_n, sizeof(char *));
 		while (--i >= 0) {
 			int desel_int = atoi(desel_elements[i]);
@@ -911,16 +937,21 @@ desel_entries(char **desel_elements, size_t desel_n, int all)
 			desel_path[i] = savestring(sel_elements[desel_int - 1].name,
 				strlen(sel_elements[desel_int - 1].name));
 		}
-	} else { /* Deselect all selected files */
+	} else {
 		desel_path = desel_elements;
 	}
 
+/*	new_selections = (char **)xrealloc(new_selections, (desel_n + 2) * sizeof(char *));
+	for (new_seln = 0; new_seln < desel_n; new_seln++)
+		new_selections[new_seln] = savestring(desel_path[new_seln], strlen(desel_path[new_seln]));
+	new_selections[new_seln] = (char *)NULL; */
+
 	/* Search the sel array for the path of the element to deselect and
 	 * store its index */
-	int desel_index = -1, err = 0, err_printed = 0, dn = (int)desel_n;
+	int err = 0, dn = (int)desel_n;
 	i = (int)desel_n;
 	while (--i >= 0) {
-		int j, k;
+		int j, k, desel_index = -1;
 
 		if (!desel_path[i])
 			continue;
@@ -935,8 +966,8 @@ desel_entries(char **desel_elements, size_t desel_n, int all)
 
 		if (desel_index == -1) {
 			dn--;
-			if (all) {
-				err_printed = 1;
+			err = 1;
+			if (desel_screen == 0) {
 				fprintf(stderr, _("%s: %s: No such selected file\n"),
 					PROGRAM_NAME, desel_path[i]);
 			}
@@ -954,15 +985,10 @@ desel_entries(char **desel_elements, size_t desel_n, int all)
 		}
 	}
 
-	if (desel_index == -1) {
-		err = 1;
-		goto FREE;
-	}
-
-	/* Free the last DESEL_N elements from the old sel array. They won't
+	/* Free the last DN elements from the old sel array. They won't
 	 * be used anymore, for they contain the same value as the last
 	 * non-deselected element due to the above array rearrangement */
-	for (i = 1; i <= (int)desel_n; i++) {
+	for (i = 1; i <= (int)dn; i++) {
 		if (((int)sel_n - i) >= 0 && sel_elements[(int)sel_n - i].name) {
 			free(sel_elements[(int)sel_n - i].name);
 			sel_elements[(int)sel_n - i].size = (off_t)UNSET;
@@ -970,33 +996,34 @@ desel_entries(char **desel_elements, size_t desel_n, int all)
 	}
 
 	/* Reallocate the sel array according to the new size */
-	sel_n = (sel_n - desel_n);
+	sel_n = (sel_n - (size_t)dn);
 
 	if ((int)sel_n < 0)
 		sel_n = 0;
 
-	if (sel_n)
+	if (sel_n > 0)
 		sel_elements = (struct sel_t *)xrealloc(sel_elements, sel_n * sizeof(struct sel_t));
 
-FREE:
 	/* Deallocate local arrays */
 	i = (int)desel_n;
 	while (--i >= 0) {
-		if (all == 0)
+		if (desel_screen == 1)
 			free(desel_path[i]);
 		free(desel_elements[i]);
 	}
-	if (all == 0)
+
+	if (desel_screen == 1) {
 		free(desel_path);
-	else if (err_printed)
-		printf(_("%d file(s) deselected. "), dn);
-	else
-		printf(_("%s: %d file(s) deselected. "), PROGRAM_NAME, dn);
-	printf(_("%zu file(s) currently selected\n"), sel_n);
+	} else if (err == 1) {
+		print_reload_msg(_("%d file(s) deselected\n"), dn);
+		print_reload_msg("%zu total selected file(s)\n", sel_n);
+	}
 	free(desel_elements);
 
-	if (err)
+	if (err == 1) {
+		save_sel();
 		return EXIT_FAILURE;
+	}
 	return EXIT_SUCCESS;
 }
 
@@ -1034,7 +1061,7 @@ deselect_from_args(char **args)
 	}
 	ds[k] = (char *)NULL;
 
-	if (desel_entries(ds, args_n, 1) == EXIT_FAILURE)
+	if (desel_entries(ds, args_n, 0) == EXIT_FAILURE)
 		return EXIT_FAILURE;
 
 	return EXIT_SUCCESS;
@@ -1089,15 +1116,12 @@ handle_alpha_entry(int i, size_t desel_n, char **desel_elements)
 	if (*desel_elements[i] == '*' && !desel_elements[i][1]) {
 		free_desel_elements(desel_n, &desel_elements);
 		int exit_status = deselect_all();
-		if (autols) {
-			free_dirlist();
-			if (list_dir() != EXIT_SUCCESS)
-				exit_status = EXIT_FAILURE;
-		}
+		if (autols == 1)
+			reload_dirlist();
 		return exit_status;
 	}
 
-	printf(_("desel: '%s': Invalid entry\n"), desel_elements[i]);
+	printf(_("desel: %s: Invalid entry\n"), desel_elements[i]);
 	free_desel_elements(desel_n, &desel_elements);
 	return EXIT_FAILURE;
 }
@@ -1108,7 +1132,7 @@ valid_desel_eln(int i, size_t desel_n, char **desel_elements)
 	int n = atoi(desel_elements[i]);
 
 	if (n <= 0 || (size_t)n > sel_n) {
-		printf(_("desel: '%s': Invalid ELN\n"), desel_elements[i]);
+		printf(_("desel: %s: Invalid ELN\n"), desel_elements[i]);
 		free_desel_elements(desel_n, &desel_elements);
 		return EXIT_FAILURE;
 	}
@@ -1139,17 +1163,15 @@ end_deselect(const int err, char ***args)
 
 	/* There is still some selected file and we are in the desel
 	 * screen: reload this screen */
-	if (sel_n && argsbk == 0) {
-		if (deselect(*args) != 0)
-			exit_status = EXIT_FAILURE;
-	}
+	if (sel_n && argsbk == 0 && deselect(*args) != 0)
+		exit_status = EXIT_FAILURE;
 
-	if (err)
-		return EXIT_FAILURE;
+	if (err) return EXIT_FAILURE;
 
 	if (autols == 1 && exit_status == EXIT_SUCCESS)
 		reload_dirlist();
 	if (argsbk > 0) {
+//		print_new_selections();
 		print_reload_msg(_("%zu file(s) deselected\n"), desel_files);
 		print_reload_msg("%zu total selected file(s)\n", sel_n);
 	} else {
@@ -1201,6 +1223,6 @@ deselect(char **args)
 			return EXIT_FAILURE;
 	}
 
-	desel_entries(desel_elements, desel_n, 0);
+	desel_entries(desel_elements, desel_n, 1);
 	return end_deselect(err, &args);
 }

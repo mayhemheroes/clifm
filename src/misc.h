@@ -25,30 +25,33 @@
 #ifndef MISC_H
 #define MISC_H
 
-int _err(int, int, const char *, ...);
-int print_reload_msg(const char *, ...);
+int _err(int msg_type, int prompt_flag, const char *format, ...);
 int alias_import(char *file);
 void bonus_function(void);
 int create_usr_var(char *str);
 int expand_prompt_name(char *name);
 int filter_function(char *arg);
+void free_autocmds(void);
 void free_prompts(void);
 void free_software(void);
 void free_stuff(void);
 void free_remotes(int exit);
 void free_tags(void);
-void handle_stdin(void);
+void get_term_size(void);
+int handle_stdin(void);
 void help_function(void);
-int quick_help(void);
 int list_commands(void);
 int list_mountpoints(void);
 int new_instance(char *dir, int sudo);
 /* char *parse_usrvar_value(const char *str, const char c); */
+int print_reload_msg(const char *, ...);
 int pin_directory(char *dir);
 void print_tips(int all);
+int quick_help(char *topic);
 void save_last_path(void);
 /* void save_pinned_dir(void); */
 /*int set_shell(char *str); */
+void set_eln_color(void);
 void set_signals_to_ignore(void);
 void set_term_title(char *str);
 void splash(void);
@@ -61,7 +64,6 @@ void reset_inotify(void);
 void read_kqueue(void);
 #endif
 int sanitize_cmd(char *cmd, int type);
-void get_term_size(void);
-//void refresh_files_list(void);
+/*void refresh_files_list(void); */
 
 #endif /* MISC_H */

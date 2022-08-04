@@ -157,11 +157,12 @@ static inline int
 sort_by_size(struct fileinfo *pa, struct fileinfo *pb)
 {
 	off_t as = pa->size, bs = pb->size;
-	if (long_view && full_dir_size) {
-		if (pa->type == DT_DIR)
-			as = pa->size * 1024;
-		if (pb->type == DT_DIR)
-			bs = pb->size * 1024;
+	if (long_view == 1 && full_dir_size == 1) {
+		int base = xargs.si == 1 ? 1000 : 1024;
+		if (pa->dir == 1)
+			as = pa->size * base;
+		if (pb->dir == 1)
+			bs = pb->size * base;
 	}
 
 	if (as > bs)
@@ -278,7 +279,7 @@ entrycmp(const void *a, const void *b)
 	struct fileinfo *pb = (struct fileinfo *)b;
 	int ret = 0, st = sort;
 
-	if (list_folders_first) {
+	if (list_dirs_first) {
 		ret = sort_dirs(pa->dir, pb->dir);
 		if (ret != 0)
 			return ret;
@@ -368,6 +369,7 @@ print_owner_group_sort(int mode)
 void
 print_sort_method(void)
 {
+	fputs(BOLD, stdout);
 	switch (sort) {
 	case SNONE:	puts(_("none")); break;
 	case SNAME:
@@ -397,6 +399,7 @@ print_sort_method(void)
 	case SGRP: print_owner_group_sort(SGRP); break;
 	default: fputs("unknown sorting method\n", stdout); break;
 	}
+	fputs(NC, stdout);
 }
 
 static inline void
@@ -439,7 +442,7 @@ _set_sort_by_name(char **arg)
 		}
 	}
 
-	fprintf(stdout, _("%s: %s: No such sorting method\n"), PROGRAM_NAME, *arg);
+	fprintf(stdout, _("st: %s: No such sorting method\n"), *arg);
 	return EXIT_FAILURE;
 }
 

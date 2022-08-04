@@ -32,12 +32,13 @@
 char *dequote_str(char *text, int mt);
 char *escape_str(const char *str);
 int *expand_range(char *str, int listdir);
+int fuzzy_match(char *s1, char *s2, const int case_sens);
 char *gen_rand_str(size_t len);
 char **get_substr(char *str, const char ifs);
 char *home_tilde(char *new_path, int *_free);
-int is_internal_f(const char *restrict cmd);
 char **parse_input_str(char *str);
 char *remove_quotes(char *str);
+char *replace_slashes(char *str, const char c);
 char *replace_substr(char *haystack, char *needle, char *rep);
 char *savestring(const char *restrict str, size_t size);
 char **split_str(const char *str, const int update_args);

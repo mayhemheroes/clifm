@@ -1,5 +1,14 @@
 # Keybindings file for CliFM
 
+# Emacs style key escapes are the simplest way of setting your
+# keybindings. For example, use "action:\C-t" to bind the action name
+# 'action' to Ctrl-t
+# Note: available action names are defined below
+
+# If you need some more control, hex, octal, and decimal notation is
+# also supported (this is needed for example for function keys). For
+# the sake of simplicity, CliFM provides a plugin to easily get the
+# adequate codes.
 # Use the 'kbgen' plugin (compile it first: gcc -o kbgen kbgen.c) to 
 # find out the escape code for the key o key sequence you want. Use 
 # either octal, hexadecimal codes or symbols.
@@ -86,7 +95,7 @@ clear-msgs:\M-t
 create-file:\M-n
 deselect-all:\M-d
 export-sel:\C-\M-e
-folders-first:\M-g
+dirs-first:\M-g
 lock:\M-o
 mountpoints:\M-m
 move-sel:\C-\M-n
@@ -111,6 +120,7 @@ toggle-light:\M-y
 toggle-long:\M-l
 toggle-max-name-len:\C-\M-l
 toggle-disk-usage:\C-\M-i
+toggle-virtualdir-full-paths:\M-w
 trash-sel:\C-\M-t
 untrash-all:\C-\M-u
 

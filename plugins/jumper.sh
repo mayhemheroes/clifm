@@ -17,11 +17,11 @@ if type fzf > /dev/null 2>&1; then
 elif type rofi > /dev/null 2>&1; then
 	finder="rofi"
 else
-	printf "CliFM: No finder found. Install either FZF or Rofi\n" >&2
+	printf "clifm: No finder found. Install either FZF or Rofi\n" >&2
 	exit 1
 fi
 
-FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/clifm/profiles/$CLIFM_PROFILE/jump.cfm"
+FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/clifm/profiles/$CLIFM_PROFILE/jump.clifm"
 
 if ! [ -f "$FILE" ]; then
 	exit 1
@@ -30,7 +30,7 @@ fi
 if [ "$finder" = "fzf" ]; then
 	# Source our plugins helper
 	if [ -z "$CLIFM_PLUGINS_HELPER" ] || ! [ -f "$CLIFM_PLUGINS_HELPER" ]; then
-		printf "CliFM: Unable to find plugins-helper file\n" >&2
+		printf "clifm: Unable to find plugins-helper file\n" >&2
 		exit 1
 	fi
 	# shellcheck source=/dev/null

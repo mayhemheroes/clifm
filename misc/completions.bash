@@ -24,10 +24,12 @@ _clifm ()
         --config-dir
         -e
         --no-eln
+        -E
+        --eln-use-workspace-color
         -f
-        --no-folders-first
+        --no-dirs-first
         -F
-        --folders-first
+        --dirs-first
         -g
         --pager
         -G
@@ -56,6 +58,8 @@ _clifm ()
         --path
         -P
         --profile
+        -r
+        --no-refresh-on-empty-line
         -s
         --splash
         -S
@@ -82,10 +86,12 @@ _clifm ()
         --cd-on-quit
         --color-scheme
         --cwd-in-title
+        --dektop-notifications
         --disk-usage
         --enable-logs
         --expand-bookmarks
         --full-dir-size
+        --fuzzy-match
         --icons
         --icons-use-file-color
         --list-and-quit
@@ -125,6 +131,8 @@ _clifm ()
         --sort-reverse
         --std-tab-comp
         --trash-as-rm
+        --virtual-dir
+        --virtual-dir-full-paths
     )
 
     if [[ $prev == "-b" || $prev == "-c" || $prev == "-k" || $prev == "-p" ]]; then

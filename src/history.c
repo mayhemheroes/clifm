@@ -45,8 +45,7 @@ print_logs(void)
 {
 	FILE *log_fp = fopen(log_file, "r");
 	if (!log_fp) {
-		_err(0, NOPRINT_PROMPT, "%s: log: '%s': %s\n",
-		    PROGRAM_NAME, log_file, strerror(errno));
+		_err(0, NOPRINT_PROMPT, "log: %s: %s\n", log_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -61,45 +60,47 @@ print_logs(void)
 	return EXIT_SUCCESS;
 }
 
-/* Log COMM into LOG_FILE (global) */
+/* Log CMD into LOG_FILE (global) */
 int
-log_function(char **comm)
+log_function(char **cmd)
 {
+	if (xargs.stealth_mode == 1)
+		return EXIT_SUCCESS;
+
 	/* If cmd logs are disabled, allow only "log" commands */
-	if (!logs_enabled) {
-		if (comm && comm[0] && strcmp(comm[0], "log") != 0)
+	if (log_cmds == 0) {
+		if (cmd && cmd[0] && strcmp(cmd[0], "log") != 0)
 			return EXIT_SUCCESS;
 	}
 
-	if (!config_ok)
+	if (config_ok == 0 || !log_file)
 		return EXIT_FAILURE;
 
 	int clear_log = 0;
 
 	/* If the command was just 'log' */
-	if (comm && comm[0] && *comm[0] == 'l' && strcmp(comm[0], "log") == 0 && !comm[1])
+	if (cmd && cmd[0] && *cmd[0] == 'l' && strcmp(cmd[0], "log") == 0 && !cmd[1])
 		return print_logs();
 
-	else if (comm && comm[0] && *comm[0] == 'l' && strcmp(comm[0], "log") == 0
-	&& comm[1]) {
-		if (*comm[1] == 'c' && strcmp(comm[1], "clear") == 0)
+	else if (cmd && cmd[0] && *cmd[0] == 'l' && strcmp(cmd[0], "log") == 0
+	&& cmd[1]) {
+		if (*cmd[1] == 'c' && strcmp(cmd[1], "clear") == 0) {
 			clear_log = 1;
-		else if (*comm[1] == 's' && strcmp(comm[1], "status") == 0) {
-			printf(_("Logs %s\n"), (logs_enabled) ? _("enabled")
-							      : _("disabled"));
+		} else if (*cmd[1] == 's' && strcmp(cmd[1], "status") == 0) {
+			printf(_("Logs %s\n"), (logs_enabled == 1) ? _("enabled") : _("disabled"));
 			return EXIT_SUCCESS;
-		} else if (*comm[1] == 'o' && strcmp(comm[1], "on") == 0) {
-			if (logs_enabled) {
+		} else if (*cmd[1] == 'o' && strcmp(cmd[1], "on") == 0) {
+			if (logs_enabled == 1) {
 				puts(_("Logs already enabled"));
 			} else {
 				logs_enabled = 1;
 				puts(_("Logs successfully enabled"));
 			}
 			return EXIT_SUCCESS;
-		} else if (*comm[1] == 'o' && strcmp(comm[1], "off") == 0) {
+		} else if (*cmd[1] == 'o' && strcmp(cmd[1], "off") == 0) {
 			/* If logs were already disabled, just exit. Otherwise, log
 			 * the "log off" command */
-			if (!logs_enabled) {
+			if (logs_enabled == 0) {
 				puts(_("Logs already disabled"));
 				return EXIT_SUCCESS;
 			} else {
@@ -111,10 +112,10 @@ log_function(char **comm)
 
 	/* Construct the log line */
 	if (!last_cmd) {
-		if (!logs_enabled) {
+		if (log_cmds == 0) {
 			/* When cmd logs are disabled, "log clear" and "log off" are
 			 * the only commands that can reach this code */
-			if (clear_log) {
+			if (clear_log == 1) {
 				last_cmd = (char *)xnmalloc(10, sizeof(char));
 				strcpy(last_cmd, "log clear");
 			} else {
@@ -131,12 +132,14 @@ log_function(char **comm)
 	}
 
 	char *date = get_date();
-	size_t log_len = strlen(date) + strlen(workspaces[cur_ws].path)
-					+ strlen(last_cmd) + 6;
-	char *full_log = (char *)xnmalloc(log_len, sizeof(char));
 
-	snprintf(full_log, log_len, "[%s] %s:%s\n", date,
-			workspaces[cur_ws].path, last_cmd);
+	size_t log_len = strlen(date)
+		+ (workspaces[cur_ws].path ? strlen(workspaces[cur_ws].path) : 2)
+		+ strlen(last_cmd) + 8;
+
+	char *full_log = (char *)xnmalloc(log_len, sizeof(char));
+	snprintf(full_log, log_len, "c:[%s] %s:%s\n", date,
+		workspaces[cur_ws].path ? workspaces[cur_ws].path : "?", last_cmd);
 
 	free(date);
 	free(last_cmd);
@@ -144,65 +147,142 @@ log_function(char **comm)
 
 	/* Write the log into LOG_FILE */
 	FILE *log_fp;
-	/* If not 'log clear', append the log to the existing logs */
 
-	if (!clear_log)
+	if (clear_log == 0) /* Append the log to the existing logs */
 		log_fp = fopen(log_file, "a");
-	else
-	/* Else, overwrite the log file leaving only the 'log clear'
-	 * command */
+	else /* Overwrite the log file leaving only the 'log clear' command */
 		log_fp = fopen(log_file, "w+");
 
 	if (!log_fp) {
-		_err('e', PRINT_PROMPT, "%s: log: '%s': %s\n", PROGRAM_NAME,
-		    log_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "log: %s: %s\n", log_file, strerror(errno));
 		free(full_log);
 		return EXIT_FAILURE;
-	} else { /* If LOG_FILE was correctly opened, write the log */
-		fputs(full_log, log_fp);
-		free(full_log);
-		fclose(log_fp);
-
-		return EXIT_SUCCESS;
 	}
+
+	fputs(full_log, log_fp);
+	free(full_log);
+	fclose(log_fp);
+
+	return EXIT_SUCCESS;
 }
 
 /* Write _MSG into the log file: [date] _MSG */
 static void
 write_msg_into_logfile(const char *_msg)
 {
-	FILE *msg_fp = fopen(msg_log_file, "a");
+	FILE *msg_fp = fopen(log_file, "a");
 	if (!msg_fp) {
-		/* Do not log this error: We might incur in an infinite loop
-		 * trying to access a file that cannot be accessed */
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, msg_log_file,
-		    strerror(errno));
+		/* Do not log this error: We might enter into an infinite loop
+		 * trying to access a file that cannot be accessed. Just warn the user
+		 * and print the error to STDERR */
+		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, log_file, strerror(errno));
 		fputs("Press any key to continue... ", stdout);
 		xgetchar();
 		putchar('\n');
 		return;
 	}
 
-	time_t rawtime = time(NULL);
-	struct tm tm;
-	localtime_r(&rawtime, &tm);
-	char date[64] = "";
-
-	strftime(date, sizeof(date), "%b %d %H:%M:%S %Y", &tm);
-	fprintf(msg_fp, "[%d-%d-%dT%d:%d:%d] ", tm.tm_year + 1900,
-	    tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-	fputs(_msg, msg_fp);
+	char *date = get_date();
+	fprintf(msg_fp, "m:[%s] %s", date, _msg);
 	fclose(msg_fp);
+	free(date);
 }
 
-/* Handle the error message MSG. Store MSG in an array of error
- * messages, write it into an error log file, and print it immediately
- * (if PRINT is zero (NOPRINT_PROMPT) or tell the next prompt, if PRINT
- * is one to do it (PRINT_PROMPT)). Messages wrote to the error log file
- * have the following format:
- * "[date] msg", where 'date' is YYYY-MM-DDTHH:MM:SS */
+/* Let's send a desktop notification */
+static void
+send_desktop_notification(char *msg)
+{
+/*	if (!msg || !*msg || !(flags & GUI) || desktop_noti != 1) */
+	if (!msg || !*msg)
+		return;
+
+	char type[12];
+	*type = '\0';
+	switch(pmsg) {
+#if defined(__HAIKU__)
+	case ERROR: snprintf(type, sizeof(type), "error"); break;
+	case WARNING: snprintf(type, sizeof(type), "important"); break;
+	case NOTICE: snprintf(type, sizeof(type), "information"); break;
+	default: snprintf(type, sizeof(type), "information"); break;
+#elif defined(__APPLE__)
+	case ERROR: snprintf(type, sizeof(type), "Error"); break;
+	case WARNING: snprintf(type, sizeof(type), "Warning"); break;
+	case NOTICE: snprintf(type, sizeof(type), "Notice"); break;
+	default: snprintf(type, sizeof(type), "Notice"); break;
+#else
+	case ERROR: snprintf(type, sizeof(type), "critical"); break;
+	case WARNING: snprintf(type, sizeof(type), "normal"); break;
+	case NOTICE: snprintf(type, sizeof(type), "low"); break;
+	default: snprintf(type, sizeof(type), "low"); break;
+#endif
+	}
+
+	size_t mlen = strlen(msg);
+	if (mlen > 0 && msg[mlen - 1] == '\n') {
+		msg[mlen - 1] = '\0';
+		mlen--;
+		if (mlen == 0)
+			return;
+	}
+
+	/* Some messages are written in the form PROGRAM_NAME: MSG. We only
+	 * want the MSG part */
+	char name[NAME_MAX];
+	snprintf(name, sizeof(name), "%s: ", PROGRAM_NAME);
+	char *p = msg;
+	size_t nlen = strlen(name);
+	int ret = strncmp(p, name, nlen);
+	if (ret == 0) {
+		if (mlen <= nlen)
+			return;
+		p = msg + nlen;
+	}
+
+#if defined(__HAIKU__)
+	char *cmd[] = {"notify", "--type", type, "--title", PROGRAM_NAME, p, NULL};
+	ret = launch_execve(cmd, FOREGROUND, E_MUTE);
+#elif defined (__APPLE__)
+	size_t msg_len = strlen(msg) + strlen(type) + strlen(PROGRAM_NAME) + 60;
+	char *_msg = (char *)xnmalloc(msg_len, sizeof(char));
+	snprintf(_msg, msg_len, "'display notification \"%s\" subtitle \"%s\" with title \"%s\"'",
+		msg, type, PROGRAM_NAME);
+	char *cmd[] = {"osascript", "-e", _msg, NULL};
+	ret = launch_execve(cmd, FOREGROUND, E_MUTE);
+	free(_msg);
+#else
+	char *cmd[] = {"notify-send", "-u", type, PROGRAM_NAME, p, NULL};
+	ret = launch_execve(cmd, FOREGROUND, E_MUTE);
+#endif
+
+	if (ret == EXIT_SUCCESS)
+		return;
+
+	/* Error: warn and print the original message */
+	fprintf(stderr, "%s: Notification daemon error: %s\n"
+		"Disable desktop notifications (run 'help desktop-notifications' "
+		"for details) or %s to silence this "
+		"warning (original message printed below)\n", PROGRAM_NAME,
+		strerror(ret), ret == ENOENT ? "install a notification daemon"
+		: "fix this error (consult your daemon's documentation)");
+	fprintf(stderr, "%s\n", msg);
+}
+
+/* Handle the error message MSG.
+ *
+ * If ADD_TO_MSGS_LIST is 1, store MSG into the messages array: MSG will be
+ * accessible to the user via the 'msg' command
+ *
+ * If PRINT_PROMPT is 1, either raise a flag to tell the next prompt to print
+ * the message itself, or, if desktop notifications are enabled and LOGME is
+ * not zero (ERR_NO_LOG), send the notification to the notification daemon
+ * NOTE: if not zero, LOGME could be either 1 (error/warning) or -1 (notice)
+ *
+ * If PRINT_PROMPT is not 1, MSG is printed directly here
+ *
+ * Finally, if logs are enabled and LOGME is 1, write the message into the log
+ * file as follows: "[date] msg", where 'date' is YYYY-MM-DDTHH:MM:SS */
 void
-log_msg(char *_msg, int print)
+log_msg(char *_msg, const int print_prompt, const int logme, const int add_to_msgs_list)
 {
 	if (!_msg)
 		return;
@@ -211,24 +291,24 @@ log_msg(char *_msg, int print)
 	if (msg_len == 0)
 		return;
 
-	/* Store messages (for current session only) in an array, so that
-	 * the user can check them via the 'msg' command */
-	msgs_n++;
-	messages = (char **)xrealloc(messages, (size_t)(msgs_n + 1) * sizeof(char *));
-	messages[msgs_n - 1] = savestring(_msg, msg_len);
-	messages[msgs_n] = (char *)NULL;
+	if (add_to_msgs_list == 1) {
+		msgs_n++;
+		messages = (char **)xrealloc(messages, (size_t)(msgs_n + 1) * sizeof(char *));
+		messages[msgs_n - 1] = savestring(_msg, msg_len);
+		messages[msgs_n] = (char *)NULL;
+	}
 
-	if (print) /* PRINT_PROMPT */
-		/* The next prompt will take care of printing the message */
-		print_msg = 1;
-	else /* NOPRINT_PROMPT */
-		/* Print the message directly here */
+	if (print_prompt == 1) {
+		if (desktop_notifications == 1 && logme != 0)
+			send_desktop_notification(_msg);
+		else
+			print_msg = 1;
+	} else {
 		fputs(_msg, stderr);
+	}
 
-	/* If the config dir cannot be found or if msg log file isn't set
-	 * yet... This will happen if an error occurs before running
-	 * init_config(), for example, if the user's home cannot be found */
-	if (!config_ok || !msg_log_file || !*msg_log_file)
+	if (xargs.stealth_mode == 1 || config_ok == 0 || !log_file || !*log_file
+	|| logme != 1 || logs_enabled == 0)
 		return;
 
 	write_msg_into_logfile(_msg);
@@ -245,8 +325,8 @@ save_dirhist(void)
 
 	FILE *fp = fopen(dirhist_file, "w");
 	if (!fp) {
-		fprintf(stderr, _("%s: Could not save directory history: %s\n"),
-		    PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("history: Could not save "
+			"directory history: %s\n"), strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -270,7 +350,9 @@ add_to_dirhist(const char *dir_path)
 	if (dirhist_cur_index + 1 >= dirhist_total_index) {
 		/* Do not add anything if new path equals last entry in
 		 * directory history */
-		if ((dirhist_total_index - 1) >= 0 && old_pwd[dirhist_total_index - 1] && *(dir_path + 1) == *(old_pwd[dirhist_total_index - 1] + 1) && strcmp(dir_path, old_pwd[dirhist_total_index - 1]) == 0)
+		if ((dirhist_total_index - 1) >= 0 && old_pwd[dirhist_total_index - 1]
+		&& *(dir_path + 1) == *(old_pwd[dirhist_total_index - 1] + 1)
+		&& strcmp(dir_path, old_pwd[dirhist_total_index - 1]) == 0)
 			return;
 
 		old_pwd = (char **)xrealloc(old_pwd,
@@ -321,9 +403,9 @@ edit_history(char **args)
 {
 	struct stat attr;
 	if (stat(hist_file, &attr) == -1) {
-		fprintf(stderr, "%s: history: %s: %s\n", PROGRAM_NAME, hist_file,
-				strerror(errno));
-		return errno;
+		int err = errno;
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "history: %s: %s\n", hist_file, strerror(errno));
+		return err;
 	}
 	time_t mtime_bfr = (time_t)attr.st_mtime;
 
@@ -361,8 +443,7 @@ __clear_history(char **args)
 	/* Let's overwrite whatever was there */
 	FILE *hist_fp = fopen(hist_file, "w+");
 	if (!hist_fp) {
-		_err(0, NOPRINT_PROMPT, "%s: history: %s: %s\n",
-		    PROGRAM_NAME, hist_file, strerror(errno));
+		_err(0, NOPRINT_PROMPT, "history: %s: %s\n", hist_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -380,7 +461,7 @@ print_history_list(void)
 	int n = DIGINUM(current_hist_n);
 	size_t i;
 	for (i = 0; i < current_hist_n; i++)
-		printf(" %s%-*zu%s %s\n", el_c, n, i + 1, df_c, history[i]);
+		printf(" %s%-*zu%s %s\n", el_c, n, i + 1, df_c, history[i].cmd);
 
 	return EXIT_SUCCESS;
 }
@@ -396,7 +477,7 @@ print_last_items(char *str)
 	int n = DIGINUM(current_hist_n);
 	size_t i;
 	for (i = current_hist_n - (size_t)num; i < current_hist_n; i++)
-		printf(" %s%-*zu%s %s\n", el_c, n, i + 1, df_c, history[i]);
+		printf(" %s%-*zu%s %s\n", el_c, n, i + 1, df_c, history[i].cmd);
 
 	return EXIT_SUCCESS;
 }
@@ -426,7 +507,12 @@ toggle_history(const char *arg)
 int
 history_function(char **comm)
 {
-	if (!config_ok) {
+	if (xargs.stealth_mode == 1) {
+		printf(_("%s: history: %s\n"), PROGRAM_NAME, STEALTH_DISABLED);
+		return EXIT_SUCCESS;
+	}
+
+	if (config_ok == 0) {
 		fprintf(stderr, _("%s: History function disabled\n"), PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
@@ -457,15 +543,12 @@ history_function(char **comm)
 static int
 exec_hist_cmd(char **cmd)
 {
-	int i;
-	int exit_status = EXIT_SUCCESS;
+	int i, exit_status = EXIT_SUCCESS;
 
 	char **alias_cmd = check_for_alias(cmd);
 	if (alias_cmd) {
-		/* If an alias is found, check_for_alias frees CMD and
-		 * returns alias_cmd in its place to be executed by
-		 * exec_cmd() */
-
+		/* If an alias is found, check_for_alias frees CMD and returns
+		 * alias_cmd in its place to be executed by exec_cmd() */
 		if (exec_cmd(alias_cmd) != 0)
 			exit_status = EXIT_FAILURE;
 
@@ -493,16 +576,16 @@ run_hist_num(const char *cmd)
 	int num = atoi(cmd);
 
 	if (num <= 0 || num > (int)current_hist_n) {
-		fprintf(stderr, _("%s: !%s: event not found\n"), PROGRAM_NAME, cmd);
+		fprintf(stderr, _("history: !%s: event not found\n"), cmd);
 		return EXIT_FAILURE;
 	}
 
-	if (record_cmd(history[num - 1]))
-		add_to_cmdhist(history[num - 1]);
+	if (record_cmd(history[num - 1].cmd))
+		add_to_cmdhist(history[num - 1].cmd);
 
-	char **cmd_hist = parse_input_str(history[num - 1]);
+	char **cmd_hist = parse_input_str(history[num - 1].cmd);
 	if (!cmd_hist) {
-		fprintf(stderr, _("%s: Error parsing history command\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("history: Error parsing history command\n"));
 		return EXIT_FAILURE;
 	}
 
@@ -516,13 +599,12 @@ static int
 run_last_hist_cmd(void)
 {
 	size_t old_args = args_n;
-	if (record_cmd(history[current_hist_n - 1]))
-		add_to_cmdhist(history[current_hist_n - 1]);
+	if (record_cmd(history[current_hist_n - 1].cmd))
+		add_to_cmdhist(history[current_hist_n - 1].cmd);
 
-	char **cmd_hist = parse_input_str(history[current_hist_n - 1]);
+	char **cmd_hist = parse_input_str(history[current_hist_n - 1].cmd);
 	if (!cmd_hist) {
-		fprintf(stderr, _("%s: Error parsing history command\n"),
-			PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("history: Error parsing history command\n"));
 		return EXIT_FAILURE;
 	}
 
@@ -539,23 +621,23 @@ run_last_lessn_hist_cmd(const char *cmd)
 	int acmd = atoi(cmd + 1);
 
 	if (!is_number(cmd + 1) || acmd <= 0 || acmd > (int)current_hist_n - 1) {
-		fprintf(stderr, _("%s: !%s: Event not found\n"), PROGRAM_NAME, cmd);
+		fprintf(stderr, _("history: !%s: Event not found\n"), cmd);
 		return EXIT_FAILURE;
 	}
 
 	size_t n = current_hist_n - (size_t)acmd - 1;
 
-	if (record_cmd(history[n]))
-		add_to_cmdhist(history[n]);
+	if (record_cmd(history[n].cmd))
+		add_to_cmdhist(history[n].cmd);
 
-	char **cmd_hist = parse_input_str(history[n]);
+	char **cmd_hist = parse_input_str(history[n].cmd);
 	if (cmd_hist) {
 		int exit_status = exec_hist_cmd(cmd_hist);
 		args_n = old_args;
 		return exit_status;
 	}
 
-	fprintf(stderr, _("%s: Error parsing history command\n"), PROGRAM_NAME);
+	_err(ERR_NO_STORE, NOPRINT_PROMPT, _("history: Error parsing history command\n"));
 	return EXIT_FAILURE;
 }
 
@@ -565,11 +647,11 @@ run_hist_string(const char *cmd)
 {
 	size_t i, len = strlen(cmd), old_args = args_n;
 
-	for (i = 0; history[i]; i++) {
-		if (*cmd != *history[i] || strncmp(cmd, history[i], len) != 0)
+	for (i = 0; history[i].cmd; i++) {
+		if (*cmd != *history[i].cmd || strncmp(cmd, history[i].cmd, len) != 0)
 			continue;
 
-		char **cmd_hist = parse_input_str(history[i]);
+		char **cmd_hist = parse_input_str(history[i].cmd);
 		if (!cmd_hist)
 			continue;
 
@@ -578,7 +660,7 @@ run_hist_string(const char *cmd)
 		return exit_status;
 	}
 
-	fprintf(stderr, _("%s: !%s: Event not found\n"), PROGRAM_NAME, cmd);
+	fprintf(stderr, _("history: !%s: Event not found\n"), cmd);
 	return EXIT_FAILURE;
 }
 
@@ -597,7 +679,7 @@ run_history_cmd(const char *cmd)
 		return run_last_hist_cmd();
 
 	/* If "!-n" */
-	if (*cmd == '-')
+	if (*cmd == '-' && *(cmd + 1) && is_number(cmd + 1))
 		return run_last_lessn_hist_cmd(cmd);
 
 	/* If !STRING */
@@ -611,23 +693,21 @@ run_history_cmd(const char *cmd)
 int
 get_history(void)
 {
-	if (!config_ok || !hist_file)
-		return EXIT_FAILURE;
+	if (!config_ok || !hist_file) return EXIT_FAILURE;
 
 	if (current_hist_n == 0) { /* Coming from main() */
-		history = (char **)xcalloc(1, sizeof(char *));
+		history = (struct history_t *)xcalloc(1, sizeof(struct history_t));
 	} else { /* Only true when comming from 'history clear' */
 		size_t i;
-		for (i = 0; history[i]; i++)
-			free(history[i]);
-		history = (char **)xrealloc(history, 1 * sizeof(char *));
+		for (i = 0; history[i].cmd; i++)
+			free(history[i].cmd);
+		history = (struct history_t *)xrealloc(history, 1 * sizeof(struct history_t));
 		current_hist_n = 0;
 	}
 
 	FILE *hist_fp = fopen(hist_file, "r");
 	if (!hist_fp) {
-		_err('e', PRINT_PROMPT, "%s: history: '%s': %s\n",
-		    PROGRAM_NAME, hist_file, strerror(errno));
+		_err('e', PRINT_PROMPT, "history: %s: %s\n", hist_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -637,21 +717,34 @@ get_history(void)
 
 	while ((line_len = getline(&line_buff, &line_size, hist_fp)) > 0) {
 		line_buff[line_len - 1] = '\0';
-		history = (char **)xrealloc(history, (current_hist_n + 2) * sizeof(char *));
-		history[current_hist_n++] = savestring(line_buff, (size_t)line_len);
+		history = (struct history_t *)xrealloc(history, (current_hist_n + 2) * sizeof(struct history_t));
+		history[current_hist_n].cmd = savestring(line_buff, (size_t)line_len);
+		history[current_hist_n].len = (size_t)line_len;
+		current_hist_n++;
 	}
 
 	curhistindex = current_hist_n ? current_hist_n - 1 : 0;
-	history[current_hist_n] = (char *)NULL;
+	history[current_hist_n].cmd = (char *)NULL;
+	history[current_hist_n].len = 0;
 	free(line_buff);
 	fclose(hist_fp);
 	return EXIT_SUCCESS;
 }
 
 void
-add_to_cmdhist(const char *cmd)
+add_to_cmdhist(char *cmd)
 {
 	if (!cmd)
+		return;
+
+	/* Remove trailing spaces from CMD */
+	size_t cmd_len = strlen(cmd);
+	int i = (int)cmd_len;
+	while (--i >= 0 && cmd[i] == ' ') {
+		cmd[i] = '\0';
+		cmd_len--;
+	}
+	if (cmd_len == 0)
 		return;
 
 	/* For readline */
@@ -662,11 +755,12 @@ add_to_cmdhist(const char *cmd)
 
 	/* For us */
 	/* Add the new input to the history array */
-	size_t cmd_len = strlen(cmd);
-	history = (char **)xrealloc(history, (size_t)(current_hist_n + 2) * sizeof(char *));
-	history[current_hist_n] = savestring(cmd, cmd_len);
+	history = (struct history_t *)xrealloc(history, (size_t)(current_hist_n + 2) * sizeof(struct history_t));
+	history[current_hist_n].cmd = savestring(cmd, cmd_len);
+	history[current_hist_n].len = cmd_len;
 	current_hist_n++;
-	history[current_hist_n] = (char *)NULL;
+	history[current_hist_n].cmd = (char *)NULL;
+	history[current_hist_n].len = 0;
 }
 
 /* Returns 1 if INPUT should be stored in history and 0 if not */
@@ -744,21 +838,6 @@ record_cmd(char *input)
 			return 0;
 		break;
 
-/*	case 'z':
-		if (*(p + 1) == 'z' && *(p + 2) == '\0')
-			return 0;
-		break;
-
-	case 's':
-		if (*(p + 1) == 'a' && strcmp(p, "salir") == 0)
-			return 0;
-		break;
-
-	case 'c':
-		if (*(p + 1) == 'h' && strcmp(p, "chau") == 0)
-			return 0;
-		break; */
-
 	default: break;
 	}
 
@@ -768,9 +847,9 @@ record_cmd(char *input)
 		return 0;
 
 	/* Consequtively equal commands in history */
-	if (history && history[current_hist_n - 1]
-	&& *p == *history[current_hist_n - 1]
-	&& strcmp(p, history[current_hist_n - 1]) == 0)
+	if (history && history[current_hist_n - 1].cmd
+	&& *p == *history[current_hist_n - 1].cmd
+	&& strcmp(p, history[current_hist_n - 1].cmd) == 0)
 		return 0;
 
 	return 1;

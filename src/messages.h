@@ -26,7 +26,7 @@
 #define MESSAGES_H
 
 /* Usage messages*/
-#define GRAL_USAGE "[-aAefFgGhHiIlLmoOsStuUvxy] [-b FILE] [-c FILE] [-D DIR] \
+#define GRAL_USAGE "[-aAeEfFgGhHiIlLmoOprsStuUvwWxy] [-b FILE] [-c FILE] [-D DIR] \
 [-k FILE] [-P PROFILE] [-z METHOD] [PATH]"
 
 #define ACTIONS_USAGE "List or edit actions/plugins\n\
@@ -47,7 +47,7 @@ Example:\n\
 - List available aliases:\n\
     alias\n\
   or\n\
-    alias ls\n\
+    alias ls (or 'alias <TAB>')\n\
 - Print a specific alias:\n\
     alias my_alias\n\
 - Import aliases from ~/.bashrc:\n\
@@ -55,18 +55,25 @@ Example:\n\
 
 #define ARCHIVE_USAGE "Compress/archive files\n\
 Usage:\n\
-  ac, ad ELN/FILE ...\n\n\
+  ac, ad ELN/FILE...\n\n\
 Examples:\n\
 - Compress/archive all selected files:\n\
     ac sel\n\
 - Compress/archive a range of files:\n\
-    ac 12-24\n\
+    ac 12-24 (or 'ac <TAB>' to choose from a list; multi-selection is allowed)\n\
 - Decompress/dearchive a file:\n\
-    ad file.tar.gz"
+    ad file.tar.gz\n\
+  or just open the file and CliFM will prompt the appropriate menu:\n\
+    o file.tar.gz (or just 'file.tar.gz')"
 
 #define AUTOCD_USAGE "Turn autocd on-off\n\
 Usage:\n\
   acd, autocd [on, off, status]"
+
+#define AUTOCMDS_USAGE "Tweak settings or run custom commands on a per directory basis\n\n\
+There are two ways to set autocommands:\n\
+  1) Via the 'autocmd' keyword in the configuration file\n\
+  2) By placing a '.cfm.in' and/or a '.cfm.out' file in the corresponding directory"
 
 #define AUTO_OPEN_USAGE "Turn auto-open on-off\n\
 Usage:\n\
@@ -82,22 +89,24 @@ Examples:\n\
 - Print the directory history list:\n\
     bh\n\
 - Change to the directory whose ELN in the list is 24:\n\
-    b !24"
+    b !24\n\
+- Use the 'f' command to go forward:\n\
+    f (Alt-k or Shift-Right also work)"
 
 #define BD_USAGE "Quickly change to a parent directory matching NAME. If \
 NAME is not specified, print the list of all parent directories\n\
 Usage:\n\
   bd [NAME]\n\n\
 Example:\n\
-- Supposing you are in ~/Documents/misc/some/deep/folder, change to ~/Documents/misc:\n\
-    bd mi"
+- Supposing you are in ~/Documents/misc/some/deep/dir, change to ~/Documents/misc:\n\
+    bd mi (or 'bd <TAB>' to choose from a list)"
 
 #define BL_USAGE "Create multiple symbolic links at once\n\
 Usage:\n\
   bl FILE(s)\n\n\
 Example:\n\
 - Symlink files file1 file2 file3 and file4 at once:\n\
-    bl file*"
+    bl file* (or 'bl <TAB>' to choose from a list; multi-selection is allowed)"
 
 #define BLEACH_USAGE "Clean up file names from non-ASCII characters\n\
 Usage:\n\
@@ -115,20 +124,22 @@ Examples:\n\
 - Bookmark the directory /media/mount:\n\
     bm a /media/mount\n\
   Note: Make sure to create a simple shortcut, like 'mnt'. Then you can change to it as follows:\n\
-    bm mnt\n\
+    bm mnt (or 'bm <TAB>' to choose from a list)\n\
 - Remove a bookmark:\n\
     bm d mnt\n\
 - Edit the bookmarks file manually:\n\
     bm edit (or F11)\n\
 - Edit the bookmarks file using vi:\n\
-    bm edit vi"
+    bm edit vi\n\
+- Print file properties of specific bookmarks using the 'b:' construct:\n\
+    p b:<TAB> (multi-selection is available)"
 
 #define BULK_USAGE "Bulk rename files\n\
 Usage:\n\
-  br, bulk ELN/FILE ...\n\n\
+  br, bulk ELN/FILE...\n\n\
 Examples:\n\
 - Bulk rename all files ending with .pdf in the current directory:\n\
-    br *.pdf\n\
+    br *.pdf (or 'br <TAB> to choose from a list; mutli-selection is allowed')\n\
 - Bulk rename all selected files:\n\
     br sel"
 
@@ -138,12 +149,12 @@ Usage:\n\
 Examples:\n\
 - Change to /var:\n\
     cd /var\n\
-  Or, if autocd is enabled (default):\n\
+  or, if autocd is enabled (default):\n\
     /var"
 
 #define COLORS_USAGE "Print the list of currently used color codes\n\
 Usage:\n\
-  cc, colors"
+  colors"
 
 #define COLUMNS_USAGE "Set columned list of files on-off\n\
 Usage:\n\
@@ -153,6 +164,8 @@ Usage:\n\
 Usage:\n\
   cs, colorschemes [edit [APP]] [COLORSCHEME]\n\n\
 Examples:\n\
+- List available color schemes:\n\
+    cs (or 'cs <TAB>')\n\
 - Edit the current color scheme:\n\
     cs edit\n\
 - Edit the current color scheme using vi:\n\
@@ -167,7 +180,21 @@ Examples:\n\
 - Deselect all selected files:\n\
     ds * (or Alt-d)\n\
 - Deselect files from a menu:\n\
-    ds"
+    ds (or 'ds <TAB>' to choose from a list; multi-selection is allowed)"
+
+#define DESKTOP_NOTIFICATIONS_USAGE "Errors, warnings, and notices are send \
+to the notification daemon instead of\n\
+being printed immediately before the next prompt\n\n\
+To enable this feature use the --desktop-notifications command line flag or\n\
+set DesktopNotifications to true in the configuration file (F10)\n\n\
+Notifications are sent using the following command:\n\n\
+Linux/BSD: notify-send -u \"TYPE\" \"TITLE\" \"MSG\"\n\
+MacOS:     osascript -e 'display notification \"MSG\" subtitle \"TYPE\" with title \"TITLE\"'\n\
+Haiku:     notify --type \"TYPE\" --title \"TITLE\" \"MSG\"\n\n\
+Note: It is the notification daemon itself who takes care of actually printing\n\
+notifications on your screen. For troubleshoting, consult your \
+daemon's documentation\n\n\
+Tip: You can always check notifications using the 'msg' command"
 
 #define DIRHIST_USAGE "List or access entries in the directory history list\n\
 Usage:\n\
@@ -180,12 +207,17 @@ Examples:\n\
 - Remove all entries from the directory history list:\n\
     b clear\n"
 
-#define DUP_USAGE "Duplicate files\n\
+#define DUP_USAGE "Duplicate files via rsync(1) (cp(1) if rsync is not found)\n\
 Usage:\n\
   d, dup FILE(s)\n\n\
 Example:\n\
 - Duplicate files whose ELN's are 12 through 20:\n\
-    d 12-20\n"
+    d 12-20\n\n\
+You will be asked for a destiny directory\n\
+Duplicated files are created as SRC.copy, and, if SRC.copy exists, as \n\
+SRC.copy-n, where n is an positive integer (starting at 1)\n\n\
+Parameters passed to rsync: --aczvAXHS --progress\n\n\
+Parameters passed to cp: -a"
 
 #define EDIT_USAGE "Edit the main configuration file\n\
 Usage:\n\
@@ -215,13 +247,32 @@ Examples:\n\
 Usage:\n\
   fc, filescounter [on, off, status]"
 
-#define FF_USAGE "Set list folders first on-off\n\
+#define FILE_DETAILS "List file details\n\
+- Toggle long/detail view mode:\n\
+    Alt-l\n\
+  Note: use PropFields in the configuration file to customize output fields\n\
+- Print properties of the file whose ELN is 4:\n\
+    p4\n\
+- Print file properties, including directory full size:\n\
+    pp DIR"
+
+#define FILE_SIZE_USAGE "File sizes/disk usage\n\
+- Enable full directory size (long view):\n\
+    fz on (or --full-dir-size)\n\
+- Toggle the disk usage analyzer mode on/off:\n\
+    Alt-TAB (or -t, --disk-usage-analyzer)\n\
+- Print apparent sizes instead of actual device usage (Linux only):\n\
+    Run with --apparent-size or set ApparentSize to true in the configuration file\n\
+- Use powers of 1000 instead of 1024 for file sizes (Linux only):\n\
+    Run with --si"
+
+#define FF_USAGE "Set list directories first on-off\n\
 Usage:\n\
-  ff, folders-first [on, off, status]\n\
+  ff, dirs-first [on, off, status]\n\
 Example:\n\
-- Disable list folders-first:\n\
+- Disable list directories-first:\n\
     ff off\n\
-  Note: Toggle folders-first on/off pressing Alt-g"
+  Note: Toggle directories-first on/off pressing Alt-g"
 
 #define FILTER_USAGE "Set a filter for the files list\n\
 Usage:\n\
@@ -234,7 +285,28 @@ Examples:\n\
 - Do not list backup files (ending with tilde):\n\
     ft .*~$\n\
 - Unset the current filter:\n\
-    ft unset"
+    ft unset\n\n\
+You can also filter files in the current directory using TAB completion via wildcards and the file types filter:\n\
+- List PDF files:\n\
+    *.pdf<TAB> (second word or more)\n\
+- List executable files:\n\
+    =x<TAB>\n\n\
+This is the list of available file types for the file types filter:\n\
+  b: Block devices\n\
+  c: Character devices\n\
+  d: Directories\n\
+  f: Regular files\n\
+  h: Multi-hardlink files\n\
+  l: Symbolic links\n\
+  p: FIFO/pipes\n\
+  s: Sockets\n\
+  C: Files with capabilities\n\
+  o: Other-writable files\n\
+  t: Files with the sticky bit set\n\
+  u: SUID files\n\
+  g: SGID files\n\
+  x: Executable files\n\n\
+Type '=' and then hit TAB to get the list of file types filters"
 
 #define FORTH_USAGE "Change to the next directory in the directory history list\n\
 Usage:\n\
@@ -245,7 +317,9 @@ Examples:\n\
 - Print the directory history list:\n\
     fh\n\
 - Change to the directory whose ELN in the list is 24:\n\
-    f !24"
+    f !24\n\
+- Use the 'b' command to go backwards:\n\
+    b (Alt-j or Shift-Left also work)"
 
 #define FZ_USAGE "Toggle full directory size on/off (only for long view mode)\n\
 Usage:\n\
@@ -260,10 +334,11 @@ Example:\n\
   Note: Press Alt-. to toggle hidden files on/off"
 
 #define HISTEXEC_USAGE "Access commands history entries\n\
-Usage: \
-!!: Execute the last command. \
-!n: Execute the command number 'n' in the history list. \
-!-n: Execute the last - n command in the history list."
+Usage:\n\
+history or !<TAB>: List available commands\n\
+!!: Execute the last command\n\
+!n: Execute the command number 'n' in the history list\n\
+!-n: Execute the last - n command in the history list"
 
 #define HISTORY_USAGE "List or access commands history entries\n\
 Usage:\n\
@@ -280,6 +355,8 @@ Examples:\n\
 - Print the last 4 commands in history:\n\
     history -4\n\n\
 You can also access the commands history via the exclamation mark (!):\n\
+- List available commands: \n\
+    history\n\
 - Execute the last command: \n\
     !!\n\
 - Execute the command number 'n' in the history list:\n\
@@ -297,7 +374,7 @@ Usage:\n\
 
 #define JUMP_USAGE "Change to a directory in the jump database\n\
 Usage:\n\
-  j, jc, jp, jl [STRING ...], jo [NUM], je\n\
+  j, jc, jp, jl [STRING]..., jo [NUM], je\n\
 Note: Consult the manpage to know how Kangaroo, this directory jumper, works.\n\n\
 Examples:\n\
 - Print the list of entries in the jump database (visited directories):\n\
@@ -307,6 +384,7 @@ Examples:\n\
 - If not enough, use multiple query strings:\n\
     j ho bui\n\
     Note: Most likey, this will take you to /home/build\n\
+    Note 2: Try TAB to get a list of possible matches: 'j bui<TAB>'\n\
 - Change to any visited directory that is PARENT of the current directory and contains the string 'str':\n\
     jp str\n\
 - Change to any visited directory that is CHILD of the current directory and contains the string 'str':\n\
@@ -400,19 +478,21 @@ Usage:\n\
   net [NAME] [edit [APP]] [m, mount NAME] [u, unmount NAME]\n\n\
 Examples:\n\
 - List available remote resources (like SSHFS or samba):\n\
-    net\n\
+    net (or 'net <TAB>')\n\
 - Mount the remote resource named 'work'\n\
-    net work (or 'net m work' or 'net mount work')\n\
+    net work (or 'net m work', 'net mount work', or 'net m <TAB>')\n\
 - Unmount the remote resource named 'work'\n\
-    net u work (or 'net unmount work')\n\
+    net u work (or 'net unmount work' or 'net u <TAB>')\n\
 - Open/edit the net configuration file:\n\
     net edit\n\
 - Open/edit the net configuration file using nano:\n\
-    net edit nano"
+    net edit nano\n\
+- Copy a file to a remote location via the cprm plugin:\n\
+    cr FILE (run 'cr --edit' to set up your remotes)"
 
-#define NEW_USAGE "Create a new file or directory\n\
+#define NEW_USAGE "Create new files and/or directories\n\
 Usage:\n\
-  n, new [FILE DIR/ ...n]\n\n\
+  n, new [FILE]... [DIR/]...\n\n\
 Examples:\n\
 - Create two files named file1 and file2:\n\
     n file1 file2\n\
@@ -439,7 +519,7 @@ Usage:\n\
   ow ELN/FILE\n\n\
 Example:\n\
 - Choose opening application for test.c from a menu:\n\
-    ow test.c\n\
+    ow test.c (or 'ow test.c <TAB>')\n\
 - Open the file test.c with geany:\n\
     ow test.c geany\n\
    Note: Type 'ow test.c' and then press TAB to get a list of applications able to open this file"
@@ -455,7 +535,8 @@ Example:\n\
 
 #define PAGER_USAGE "Set the files list pager on-off\n\
 Usage:\n\
-  pg, pager [on, off, status]"
+  pg, pager [on, off, status]\n\
+Note: You can also try the 'pager' plugin running 'gg'"
 
 #define PIN_USAGE "Pin a file or directory\n\
 Usage:\n\
@@ -477,18 +558,18 @@ Examples:\n\
 - List available profiles:\n\
     pf ls\n\
 - Set profile to the profile named myprofile:\n\
-    pf set myprofile\n\
+    pf set myprofile (or 'pf set <TAB>' to choose from a list)\n\
 - Add a new profile named new_profile:\n\
     pf add new_profile\n\
 - Remove the profile named myprofile:\n\
-    pf del myprofile"
+    pf del myprofile (or 'pf del <TAB>' to choose from a list)"
 
 #define PROP_USAGE "Print files properties\n\
 Usage:\n\
-  p, pr, pp, prop [ELN/FILE ... n]\n\n\
+  p, pr, pp, prop [ELN/FILE]...\n\n\
 Examples:\n\
 - Print the properties of the file whose ELN is 12:\n\
-    p 12\n\
+    p 12 (or 'p <TAB>' to choose from a list)\n\
 - Print the properties of all selected files:\n\
     p sel\n\
 - Print the properties of the directory 'dir' (including its total size):\n\
@@ -497,9 +578,9 @@ Examples:\n\
 #define PROMPT_USAGE "Change current prompt\n\
 Usage:\n\
   prompt [NAME, edit, list, reload, unset]\n\
-Example:\n\
+Examples:\n\
 - List available prompts:\n\
-    prompt list\n\
+    prompt list (or 'prompt <TAB>' to choose from a list)\n\
 - Change prompt to prompt named MYPROMPT:\n\
     prompt MYPROMPT\n\
 - Edit the prompts file:\n\
@@ -520,15 +601,41 @@ Examples:\n\
     rr\n\
 - Bulk remove files/dirs in the current directory using nano:\n\
     rr nano\n\
-- Bulk remove files/dirs in mydir/ using vi:\n\
+- Bulk remove files/dirs in the directory 'mydir' using vi:\n\
     rr mydir vi"
+
+#define SEARCH_USAGE "Search for files using either glob or regular expressions\n\
+Usage:\n\
+  /PATTERN [-filetype] [-x] [DIR]\n\n\
+Examples:\n\
+- List all PDF files in the current working directory:\n\
+    /*.pdf (or, as a regular expression, '/.*\\.pdf$')\n\
+- List all files starting with 'A' in the directory whose ELN is 7:\n\
+    /A* 7\n\
+- List all .conf files in /etc\n\
+    /*.conf /etc\n\n\
+You can further filter the search using a file type filter:\n\
+  -b	block device\n\
+  -c	character device\n\
+  -d	directory\n\
+  -f	regular file\n\
+  -l	symlink\n\
+  -p	FIFO/pipe\n\
+  -s	socket\n\
+- For example, to list all directories containing a dot or a dash and ending \
+with 'd' in the directory named Documents:\n\
+    /[.-].*d$ -d Documents/\n\n\
+To perform a recursive search, use the -x modifier (file types not allowed):\n\
+    /str -x /boot"
 
 #define SEL_USAGE "Select one or multiple files\n\
 Usage:\n\
   s, sel ELN/FILE... [[!]PATTERN] [-FILETYPE] [:PATH]\n\n\
+Recognized file types: (d)irectory, (r)egular file, symbolic (l)ink, (s)ocket, \
+(f)ifo/pipe, (b)lock device, (c)haracter device\n\n\
 Examples:\n\
 - Select the file whose ELN is 12:\n\
-    s 12\n\
+    s 12 (or 's <TAB>' to choose from a list; multi-selection is allowed)\n\
 - Select all files ending with .odt:\n\
     s *.odt\n\
 - Select multiple files at once:\n\
@@ -543,8 +650,10 @@ Examples:\n\
     c sel\n\
 - Move selected files into the directory whose ELN is 24:\n\
     m sel 24\n\
-- Deselect all selected files\n\
-    ds * (or Alt-d)"
+- Deselect all selected files:\n\
+    ds * (or Alt-d)\n\
+- Deselect files selectively:\n\
+    ds <TAB> (multi-selection is allowed)"
 
 #define SORT_USAGE "Change sort method for the files list\n\
 Usage:\n\
@@ -555,7 +664,7 @@ Usage:\n\
 Note: Both numbers and names are allowed\n\n\
 Examples:\n\
 - List files by size:\n\
-    st size\n\
+    st size (or 'st <TAB>' to choose from a list)\n\
 - Revert the current sorting method (i.e. z-a instead of a-z):\n\
     st rev"
 
@@ -580,7 +689,7 @@ Examples:\n\
 - Tag all selected files as 'special':\n\
     ta sel :special\n\
 - List all files tagged as 'work' and all files tagged as 'documents':\n\
-    tl work documents\n\
+    tl work documents (or 'tl <TAB>' to choose from a list)\n\
 - Rename tag 'documents' as 'docs':\n\
     tm documents docs\n\
 - Merge tag 'png' into 'images':\n\
@@ -591,20 +700,22 @@ and the 'png' tag will be removed\n\
     td images\n\
 - Untag a few files from the 'work' tag:\n\
     tu :work file1 image.png dir2\n\
+    or\n\
+    tu :<TAB> (and then TAB again to select tagged files)\n\
 Operating on tagged files (t:TAG)\n\
 - Print the file properties of all files tagged as 'docs':\n\
-    p t:docs\n\
+    p t:docs (or 'p t:<TAB>' to choose from a list)\n\
 - Remove all files tagged as 'images':\n\
     r t:images\n\
 - Run stat(1) over all files tagged as 'work' and all files tagged as 'docs':\n\
     stat t:work t:docs\n\n\
 To operate only on some tagged files use TAB as follows:\n\
-    t:TAG<TAB>\n\
+    t:TAG<TAB> (multi-selection is allowed)\n\
 Mark the files you need, and then press Enter or right"
 
 #define TE_USAGE "Toggle the executable bit on files\n\
 Usage:\n\
-  te FILE(s)\n\n\
+  te FILE(s) (or 'te <TAB>' to choose from a list; multi-selection is allowed)\n\n\
 Examples:\n\
 - Set the executable bit on all shell scripts in the current directory:\n\
     te *.sh\n\
@@ -613,10 +724,10 @@ Examples:\n\
 
 #define TRASH_USAGE "Send one or multiple files to the trash can\n\
 Usage:\n\
-  t, tr, trash [ELN/FILE ... n] [ls, list] [clear, empty] [del]\n\n\
+  t, tr, trash [ELN/FILE]... [ls, list] [clear, empty] [del]\n\n\
 Examples:\n\
 - Trash the file whose ELN is 12:\n\
-    t 12\n\
+    t 12 (or 't <TAB>' to choose from a list; multi-selection is allowed)\n\
 - Trash all files ending with .sh\n\
     t *.sh\n\
 - List currently trashed files:\n\
@@ -628,7 +739,7 @@ Examples:\n\
 - Untrash all trashed files (restore them to their original location):\n\
     u *\n\
 - Untrash files using a menu:\n\
-    u"
+    u (or 'u <TAB>' to choose from a list; multi-selection is allowed)"
 
 #define UNICODE_USAGE "Set unicode on-off\n\
 Usage:\n\
@@ -641,7 +752,7 @@ Examples:\n\
 - Untrash all trashed files (restore them to their original location):\n\
     u *\n\
 - Untrash files using a menu:\n\
-    u"
+    u (or 'u <TAB>' to choose from a list; multi-selection is allowed)"
 
 #define VV_USAGE "Copy selected files into a directory and rename them at once\n\
 Usage:\n\
@@ -685,14 +796,19 @@ Note: To create files and directories you can use the 'n' command as well\n\
 
 #define WS_USAGE "Switch workspaces\n\
 Usage:\n\
-  ws [NUM, +, -]\n\n\
+  ws [NUM/NAME, +, -]\n\n\
 Examples:\n\
-- Switch to the first worksapce\n\
+- List available workspaces\n\
+    ws (or 'ws <TAB>')\n\
+- Switch to the first workspace\n\
     ws 1 (or Alt-1)\n\
+- Switch to worksapce named 'main'\n\
+    ws main\n\
 - Switch to the next workspace:\n\
     ws +\n\
 - Switch to the previous workspace:\n\
-    ws -"
+    ws -\n\n\
+Note: Use the WorkspaceNames option in the configuration file to name your workspaces"
 
 #define X_USAGE "Launch a new instance of CliFM on a new terminal window\n\
 Usage:\n\
@@ -710,135 +826,142 @@ Examples:\n\
 Page Down: Advance one page\nq: Stop pagging\n"
 #define PAGER_LABEL "\x1b[7;97m--Mas--\x1b[0;49m"
 #define NOT_AVAILABLE "This feature has been disabled at compile time"
-#define STEALTH_DISABLED "This function is disabled in stealth mode"
-#define CONFIG_FILE_UPDATED "File modified. Configuration file updated\n"
+#define STEALTH_DISABLED "Access to configuration files is not allowed in stealth mode"
+#define CONFIG_FILE_UPDATED "File modified. Settings updated\n"
 
 #ifndef __HAIKU__
-#define HELP_MESSAGE "Enter '?' or press F1-F3 for instructions"
+# define HELP_MESSAGE "Enter '?' or press F1-F3 for instructions"
 #else
-#define HELP_MESSAGE "Enter '?' or press F5-F7 for instructions"
+# define HELP_MESSAGE "Enter '?' or press F5-F7 for instructions"
 #endif
 
 #define SHORT_OPTIONS "\
-\n -a, --no-hidden\t\t Do not show hidden files (default)\
-\n -A, --show-hidden\t\t Show hidden files\
-\n -b, --bookmarks-file=FILE\t Specify an alternative bookmarks file\
-\n -c, --config-file=FILE\t\t Specify an alternative configuration file\
-\n -D, --config-dir=DIR\t\t Specify an alternative configuration directory\
-\n -e, --no-eln\t\t\t Do not print ELN's (entry list number) \
-\n -f, --no-folders-first\t\t Do not list folders first\
-\n -F, --folders-first\t\t List folders first (default)\
-\n -g, --pager\t\t\t Enable the pager\
-\n -G, --no-pager\t\t\t Disable the pager (default)\
-\n -h, --help\t\t\t Show this help and exit\
-\n -H, --horizontal-list\t\t List files horizontally\
-\n -i, --no-case-sensitive\t No case-sensitive files listing (default)\
-\n -I, --case-sensitive\t\t Case-sensitive files listing\
-\n -k, --keybindings-file=FILE\t Specify an alternative keybindings file\
-\n -l, --no-long-view\t\t Disable long view mode (default)\
-\n -L, --long-view\t\t Enable long view mode\
-\n -m, --dihist-map\t\t Enable the directory history map\
-\n -o, --no-autols\t\t Do not list files automatically\
-\n -O, --autols\t\t\t List files automatically (default)\
-\n -p, --path=PATH\t\t Use PATH as CliFM's starting path (deprecated: use positional \
+\n  -a, --no-hidden\t\t Do not show hidden files (default)\
+\n  -A, --show-hidden\t\t Show hidden files\
+\n  -b, --bookmarks-file=FILE\t Specify an alternative bookmarks file\
+\n  -c, --config-file=FILE\t Specify an alternative configuration file\
+\n  -D, --config-dir=DIR\t\t Specify an alternative configuration directory\
+\n  -e, --no-eln\t\t\t Do not print ELN's (entry list number)\
+\n  -E, --eln-use-workspace-color\t ELN's use the current workspace color\
+\n  -f, --no-dirs-first\t\t Do not list directories first\
+\n  -F, --dirs-first\t\t List directories first (default)\
+\n  -g, --pager\t\t\t Enable the pager\
+\n  -G, --no-pager\t\t Disable the pager (default)\
+\n  -h, --help\t\t\t Show this help and exit\
+\n  -H, --horizontal-list\t\t List files horizontally\
+\n  -i, --no-case-sensitive\t No case-sensitive files listing (default)\
+\n  -I, --case-sensitive\t\t Case-sensitive files listing\
+\n  -k, --keybindings-file=FILE\t Specify an alternative keybindings file\
+\n  -l, --no-long-view\t\t Disable long/detail view mode (default)\
+\n  -L, --long-view\t\t Enable long/detail view mode\
+\n  -m, --dihist-map\t\t Enable the directory history map\
+\n  -o, --no-autols\t\t Do not list files automatically\
+\n  -O, --autols\t\t\t List files automatically (default)\
+\n  -p, --path=PATH\t\t Use PATH as CliFM's starting path (deprecated: use positional \
 parameters instead)\
-\n -P, --profile=PROFILE\t\t Use (or create) PROFILE as profile\
-\n -s, --splash \t\t\t Enable the splash screen\
-\n -S, --stealth-mode \t\t Leave no trace on the host system (see the manpage)\
-\n -t, --disk-usage-analyzer \t Run in disk usage analyzer mode\
-\n -u, --no-unicode \t\t Disable Unicode\
-\n -U, --unicode \t\t\t Enable Unicode support (default)\
-\n -v, --version\t\t\t Show version details and exit\
-\n -w, --workspace=NUM\t\t Start in workspace NUM\
-\n -x, --no-ext-cmds\t\t Disallow the use of external commands\
-\n -y, --light-mode\t\t Enable the light mode\
-\n -z, --sort=METHOD\t\t Sort files by METHOD (see the manpage)"
+\n  -P, --profile=PROFILE\t\t Use (or create) PROFILE as profile\
+\n  -r, --no-refresh-on-empty-line Do not refresh the list of files when pressing Enter \
+on an empty line\
+\n  -s, --splash\t\t\t Enable the splash screen\
+\n  -S, --stealth-mode\t\t Leave no trace on the host system\
+\n  -t, --disk-usage-analyzer\t Run in disk usage analyzer mode\
+\n  -u, --no-unicode\t\t Disable Unicode support\
+\n  -U, --unicode \t\t Enable Unicode support (default)\
+\n  -v, --version\t\t\t Show version details and exit\
+\n  -w, --workspace=NUM\t\t Start in workspace NUM\
+\n  -W, --no-toggle-workspaces\t Workspace keybindings do not toggle previous and current workspaces\
+\n  -x, --no-ext-cmds\t\t Disallow the use of external commands\
+\n  -y, --light-mode\t\t Enable the light mode\
+\n  -z, --sort=METHOD\t\t Sort files by METHOD (see the manpage)"
 
 #define LONG_OPTIONS "\
-\n     --case-sens-dirjump\t Do not ignore case when consulting the jump \
+\n      --case-sens-dirjump\t Do not ignore case when consulting the jump \
 database (via the 'j' command)\
-\n     --case-sens-path-comp\t Enable case sensitive path completion\
-\n     --cd-on-quit\t\t Enable cd-on-quit functionality (see the manpage)\
-\n     --color-scheme=NAME\t Use color scheme NAME\
-\n     --cwd-in-title\t\t Print current directory in terminal window title\
-\n     --disk-usage\t\t Show disk usage (free/total)\
-\n     --enable-logs\t\t Enable program logs\
-\n     --expand-bookmarks\t\t Expand bookmark names into the corresponding \
+\n      --case-sens-path-comp\t Enable case sensitive path completion\
+\n      --cd-on-quit\t\t Enable cd-on-quit functionality (see the manpage)\
+\n      --color-scheme=NAME\t Use color scheme NAME\
+\n      --cwd-in-title\t\t Print current directory in the terminal window title\
+\n      --desktop-notifications\t Enable desktop notifications\
+\n      --disk-usage\t\t Show disk usage (free/total)\
+\n      --enable-logs\t\t Enable program logs\
+\n      --expand-bookmarks\t Expand bookmark names into the corresponding \
 bookmark paths\
-\n     --full-dir-size\t\t Print the size of directories and their contents \
+\n      --full-dir-size\t\t Print the size of directories and their contents \
 in long view mode\
-\n     --fzftab\t\t\t Enable FZF mode for TAB completion\
-\n     --icons\t\t\t Enable icons\
-\n     --icons-use-file-color\t Icons color follows file color\
-\n     --int-vars\t\t\t Enable internal variables\
-\n     --list-and-quit\t\t List files and quit. It may be used in conjunction with -p\
-\n     --max-dirhist\t\t Maximum number of visited directories to recall\
-\n     --max-files=NUM\t\t List only up to NUM files\
-\n     --max-path=NUM\t\t Set the maximun number of characters \
-after which the current directory in the prompt line will be abreviated to the \
-directory base name (if \\z is used in the prompt)\
-\n     --no-dir-jumper\t\t Disable the directory jumper function\
-\n     --no-cd-auto\t\t Disable the autocd function\
-\n     --no-classify\t\t Do not append file type indicators\
-\n     --no-clear-screen\t\t Do not clear the screen when listing directories\
-\n     --no-color\t\t\t Disable colors \
-\n     --no-columns\t\t Disable columned files listing\
-\n     --no-control-d-exit\t\t Do not allow exit on EOF (Control-d)\
-\n     --no-file-cap\t\t Do not check files capabilities when listing files\
-\n     --no-file-ext\t\t Do not check files extension when listing files\
-\n     --no-files-counter\t\t Disable the files counter for directories\
-\n     --no-follow-symlink\t Do not follow symbolic links when listing files\
-\n     --no-highlight\t\t Disable syntax highlighting\
-\n     --no-history\t\t Do not write commands into the history file\
-\n     --no-open-auto\t\t Same as no-cd-auto, but for files\
-\n     --no-restore-last-path\t Save last visited directory to be restored \
-in the next session\
-\n     --no-suggestions\t\t Disable auto-suggestions\
-\n     --no-tips\t\t\t Disable startup tips\
-\n     --no-warning-prompt\t Disable the warning prompt\
-\n     --no-welcome-message\t Disable the welcome message\
-\n     --only-dirs\t\t List only directories and symbolic links to directories\
-\n     --open=FILE\t\t Run as a stand-alone resource opener: open FILE and exit\
-\n     --opener=APPLICATION\t Resource opener to use instead of 'lira',\
+\n      --fuzzy-match\t\t Enable fuzzy TAB completion/suggestions for file names \
+and paths\
+\n      --fzytab\t\t\t Use fzy to display completion matches\
+\n      --icons\t\t\t Enable icons\
+\n      --icons-use-file-color\t Icon colors follow file colors\
+\n      --int-vars\t\t Enable internal variables\
+\n      --list-and-quit\t\t List files and quit\
+\n      --max-dirhist\t\t Maximum number of visited directories to recall\
+\n      --max-files=NUM\t\t List only up to NUM files\
+\n      --max-path=NUM\t\t Number of characters \
+after which the current directory in the prompt will be abreviated to its \
+base name (if \\z is used in the prompt)\
+\n      --no-dir-jumper\t\t Disable the directory jumper function\
+\n      --no-cd-auto\t\t Disable the autocd function\
+\n      --no-classify\t\t Do not append file type indicators\
+\n      --no-clear-screen\t\t Do not clear the screen when listing files\
+\n      --no-color\t\t Disable colors \
+\n      --no-columns\t\t Disable columned files listing\
+\n      --no-control-d-exit\t Do not allow exit on EOF (Control-d)\
+\n      --no-file-cap\t\t Do not check file capabilities when listing files\
+\n      --no-file-ext\t\t Do not check file extensions when listing files\
+\n      --no-files-counter\t Disable the files counter for directories\
+\n      --no-follow-symlink\t Do not follow symbolic links when listing files\
+\n      --no-highlight\t\t Disable syntax highlighting\
+\n      --no-history\t\t Do not write commands into the history file\
+\n      --no-open-auto\t\t Same as no-cd-auto, but for files\
+\n      --no-restore-last-path\t Do not record the last visited directory\
+\n      --no-suggestions\t\t Disable auto-suggestions\
+\n      --no-tips\t\t\t Disable startup tips\
+\n      --no-warning-prompt\t Disable the warning prompt\
+\n      --no-welcome-message\t Disable the welcome message\
+\n      --only-dirs\t\t List only directories and symbolic links to directories\
+\n      --open=FILE\t\t Run as a stand-alone resource opener: open FILE and exit\
+\n      --opener=APPLICATION\t Resource opener to use instead of 'lira', \
 CliFM's built-in opener\
-\n     --print-sel\t\t Keep the list of selected files in sight\
-\n     --rl-vi-mode\t\t Set readline to vi editing mode (defaults to emacs mode)\
-\n     --secure-cmds\t\t Filter commands to prevent command injection\
-\n     --secure-env\t\t Run in a sanitized environment (regular mode)\
-\n     --secure-env-full\t\t Run in a sanitized environment (full mode)\
-\n     --share-selbox\t\t Make the Selection Box common to different profiles\
-\n     --si\t\t\t Print sizes in powers of 1000, as defined in the \
-International System of Units (SI), instead of 1024 (Linux only)\
-\n     --sort-reverse\t\t Sort in reverse order, e.g. z-a instead of a-z \
-(default order)\
-\n     --trash-as-rm\t\t The 'r' command executes 'trash' instead of \
-'rm' to prevent accidental deletions\n"
+\n      --print-sel\t\t Keep the list of selected files in sight\
+\n      --rl-vi-mode\t\t Set readline to vi editing mode (defaults to emacs mode)\
+\n      --secure-cmds\t\t Filter commands to prevent command injection\
+\n      --secure-env\t\t Run in a sanitized environment (regular mode)\
+\n      --secure-env-full\t\t Run in a sanitized environment (full mode)\
+\n      --share-selbox\t\t Make the Selection Box common to different profiles\
+\n      --si\t\t\t Print sizes in powers of 1000 instead of 1024 (Linux only)\
+\n      --sort-reverse\t\t Sort in reverse order, e.g. z-a instead of a-z\
+\n      --smenutab\t\t Use smenu to display completion matches\
+\n      --stdtab\t\t\t Force the use of the standard TAB completion mode (readline)\
+\n      --trash-as-rm\t\t The 'r' command executes 'trash' instead of \
+'rm' to prevent accidental deletions\
+\n      --virtual-dir-full-paths\t Files in virtual directories are listed as full paths instead of target base names\
+\n      --virtual-dir=PATH\t Absolute path to a directory to be used as virtual directory\n"
 
 #define CLIFM_COMMANDS "\
 \nBUILT-IN COMMANDS:\n\nFor a complete description of each of these \
-commands run 'cmd' (or press F2) or consult the manpage (F1).\n\n\
+commands run 'cmd' (or press F2) or consult the manpage (F1).\n\
 You can also try the interactive help plugin (it depends on FZF): just \
-enter 'ih', that's it.\n\n\
-It is also recommended to consult the project's wiki \
-(https://github.com/leo-arch/clifm/wiki)\n\n\
+enter 'ih', that's it.\n\
+Help topics are available. Type 'help <TAB>' to get a list of topics.\n\n\
 The following is just a brief list of available commands and possible \
-parameters.\n\n\
+parameters:\n\n\
  ELN/FILE/DIR (auto-open and autocd functions)\n\
  /PATTERN [DIR] [-filetype] [-x] (quick search)\n\
  ;[CMD], :[CMD] (run CMD via the system shell)\n\
- ac, ad ELN/FILE ... (archiving functions)\n\
+ ac, ad ELN/FILE... (archiving functions)\n\
  acd, autocd [on, off, status]\n\
  actions [edit [APP]]\n\
  alias [import FILE] [ls, list] [NAME]\n\
  ao, auto-open [on, off, status]\n\
  b, back [h, hist] [clear] [!ELN]\n\
- bb, bleach ELN/FILE ... (file names cleaner)\n\
- bd [NAME] ... (backdir function)\n\
- bl ELN/FILE ... (batch links)\n\
+ bb, bleach ELN/FILE... (file names cleaner)\n\
+ bd [NAME]... (backdir function)\n\
+ bl ELN/FILE... (batch links)\n\
  bm, bookmarks [a, add PATH] [d, del] [edit] [SHORTCUT or NAME]\n\
- br, bulk ELN/FILE ...\n\
+ br, bulk ELN/FILE...\n\
  c, l [e, edit], m, md, r (copy, link, move, makedir, and remove)\n\
- cc, colors\n\
+ colors\n\
  cd [ELN/DIR]\n\
  cl, columns [on, off]\n\
  cmd, commands\n\
@@ -846,18 +969,18 @@ parameters.\n\n\
  d, dup FILE(s)\n\
  ds, desel [*, a, all]\n\
  edit [APPLICATION] [reset]\n\
- exp [ELN/FILE ...]\n\
+ exp [ELN/FILE]...\n\
  ext [on, off, status]\n\
  f, forth [h, hist] [clear] [!ELN]\n\
  fc, filescounter [on, off, status]\n\
- ff, folders-first [on, off, status]\n\
+ ff, dirs-first [on, off, status]\n\
  fs\n\
  ft, filter [unset] [REGEX]\n\
  fz [on, off]\n\
  hf, hidden [on, off, status]\n\
  history [edit [APP]] [clear] [-n] [on, off, status]\n\
  icons [on, off]\n\
- j, jc, jp, jl [STRING ...] jo [NUM], je (directory jumper function)\n\
+ j, jc, jp, jl [STRING]... jo [NUM], je (directory jumper function)\n\
  kb, keybinds [edit [APP]] [reset] [readline]\n\
  lm [on, off] (lightmode)\n\
  log [clear]\n\
@@ -865,12 +988,12 @@ parameters.\n\n\
  mm, mime [info ELN/FILE] [edit] [import] (resource opener)\n\
  mp, mountpoints\n\
  msg, messages [clear]\n\
- n, new FILE DIR/ ...n\n\
+ n, new [FILE]... [DIR/]...n\n\
  net [NAME] [edit [APP]] [m, mount NAME] [u, unmount NAME]\n\
  o, open [ELN/FILE] [APPLICATION]\n\
  ow [ELN/FILE] [APPLICATION] (open with ...)\n\
  opener [default] [APPLICATION]\n\
- p, pr, pp, prop [ELN/FILE ... n]\n\
+ p, pr, pp, prop [ELN/FILE]...\n\
  path, cwd\n\
  pf, prof, profile [ls, list] [set, add, del PROFILE]\n\
  pg, pager [on, off, status]\n\
@@ -885,7 +1008,7 @@ parameters.\n\n\
  splash\n\
  st, sort [METHOD] [rev]\n\
  stats\n\
- t, tr, trash [ELN/FILE ... n] [ls, list] [clear, empty] [del]\n\
+ t, tr, trash [ELN/FILE]... [ls, list] [clear, empty] [del]\n\
  tag [ls, list] [new] [rm, remove] [mv, rename] [untag] [merge] [FILE(s)] [[:]TAG]\n\
  te [FILE(s)]\n\
  tips\n\
@@ -901,13 +1024,15 @@ parameters.\n\n\
  Right, C-f: Accept the entire suggestion\n\
  M-Right, M-f: Accept the first suggested word\n\
  M-c: Clear the current command line buffer\n\
- M-g: Toggle list-folders-first on/off\n\
- C-r: Refresh the screen\n\
- M-l: Toggle long view mode on/off\n\
+ M-q: Delete the last entered word\n\
+ M-g: Toggle list directories first on/off\n\
+ M-l: Toggle long/detail view mode on/off\n\
+ M-.: Toggle hidden files on/off\n\
+ M-,: Toggle list only directories on/off\n\
  M-m: List mountpoints\n\
- M-t: Clear messages\n\
  M-h: Show directory history\n\
- M-i, M-.: Toggle hidden files on/off\n\
+ M-t: Clear messages\n\
+ C-r: Refresh the screen\n\
  M-s: Open the Selection Box\n\
  M-a: Select all files in the current working directory\n\
  M-d: Deselect all selected files\n\
@@ -955,12 +1080,16 @@ parameters.\n\n\
 NOTE: C stands for Ctrl, S for Shift, and M for Meta (Alt key in \
 most keyboards)\n"
 
+/*
 #define HELP_END_NOTE "Run the 'colors' or 'cc' command to see the list \
 of currently used color codes.\n\n\
 The color schemes file, just as the configuration and profile \
 files, allow you to customize colors, the prompt string, define \
-some prompt and profile commands, aliases, autocommands, and more.\n\
-For a full description consult the manpage."
+some prompt and profile commands, aliases, autocommands, and more.\n\n\
+For a full description consult the manpage and/or the Wiki (https://github.com/leo-arch/clifm/wiki)." */
+
+#define HELP_END_NOTE "For a full description consult the manpage and/or the \
+Wiki (https://github.com/leo-arch/clifm/wiki)."
 
 #define ASCII_LOGO "\
                             _______     _ \n\
@@ -973,7 +1102,7 @@ For a full description consult the manpage."
 
 #define QUICK_HELP "\
 This is only a quick help. For more information and advanced tricks \n\
-consult the manpage and/or the Wiki (https://github.com/leo-arch/clifm/wiki)\n\
+consult the manpage and/or our Wiki (https://github.com/leo-arch/clifm/wiki)\n\
 \n\
 NAVIGATION\n\
 ----------\n\

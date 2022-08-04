@@ -64,9 +64,11 @@ struct defs_t *defs;
 size_t defs_n = 0;
 #endif /* CLIFM_SUCKLESS */
 
-/* Retrieve the color corresponding to dir FILENAME with mode MODE */
+/* Retrieve the color corresponding to dir FILENAME with mode MODE
+ * If LINKS > 2, we know the directory is populated, so that there's no need
+ * to run count_dir() */
 char *
-get_dir_color(const char *filename, const mode_t mode)
+get_dir_color(const char *filename, const mode_t mode, const nlink_t links)
 {
 	char *color = (char *)NULL;
 	int sticky = 0;
@@ -77,7 +79,7 @@ get_dir_color(const char *filename, const mode_t mode)
 	if (mode & S_IWOTH)
 		is_oth_w = 1;
 
-	int files_dir = count_dir(filename, CPOP);
+	int files_dir = links > 2 ? (int)links : count_dir(filename, CPOP);
 
 	color = sticky ? (is_oth_w ? tw_c : st_c) : is_oth_w ? ow_c
 		   : ((files_dir == 2 || files_dir == 0) ? ed_c : di_c);
@@ -92,6 +94,8 @@ get_file_color(const char *filename, const struct stat *attr)
 
 #ifdef _LINUX_CAP
 	cap_t cap;
+#else
+	UNUSED(filename);
 #endif
 	if (attr->st_mode & 04000) { /* SUID */
 		color = su_c;
@@ -106,10 +110,7 @@ get_file_color(const char *filename, const struct stat *attr)
 #endif
 	else if ((attr->st_mode & 00100) /* Exec */
 	|| (attr->st_mode & 00010) || (attr->st_mode & 00001)) {
-		if (FILE_SIZE_PTR == 0)
-			color = ee_c;
-		else
-			color = ex_c;
+		color = FILE_SIZE_PTR == 0 ? ee_c : ex_c;
 	} else if (FILE_SIZE_PTR == 0) {
 		color = ef_c;
 	} else if (attr->st_nlink > 1) { /* Multi-hardlink */
@@ -170,10 +171,8 @@ is_color_code(const char *str)
 			digits = 0;
 			semicolon++;
 		} else {
-			if (*str != '\n') {
-			/* Neither digit nor semicolon */
+			if (*str != '\n') /* Neither digit nor semicolon */
 				return 0;
-			}
 		}
 		str++;
 	}
@@ -233,12 +232,11 @@ END:
 }
 #endif /* CLIFM_SUCKLESS */
 
-/* Returns a pointer to the corresponding color code for EXT, if some
- * color was defined */
+/* Returns a pointer to the corresponding color code for EXT, if any */
 char *
 get_ext_color(char *ext)
 {
-	if (!ext || !ext_colors_n)
+	if (!ext || !*ext || !*(ext + 1) || ext_colors_n == 0)
 		return (char *)NULL;
 
 	ext++;
@@ -249,8 +247,7 @@ get_ext_color(char *ext)
 			continue;
 
 		char *p = ext, *q = ext_colors[i];
-		/* +2 because stored extensions have this form: *.ext */
-		q += 2;
+		q += 2; /* +2 because stored extensions have this form: *.ext */
 
 		size_t match = 1;
 		while (*p) {
@@ -265,12 +262,6 @@ get_ext_color(char *ext)
 		if (!match || *q != '=')
 			continue;
 
-/*		char *c = (char *)NULL;
-		printf("Q:'%s'\n", q + 1);
-		if (is_color_code(q + 1) != 1 && check_defs(q + 1) == NULL)
-			continue;
-
-		return c ? c : ++q; */
 		q++;
 		return q ? q : (char *)NULL;
 	}
@@ -296,9 +287,8 @@ strip_color_line(const char *str, char mode)
 			if ((*str >= '0' && *str <= '9') || (*str >= 'a' && *str <= 'z')
 			|| (*str >= 'A' && *str <= 'Z')
 			|| *str == '=' || *str == ';' || *str == ':'
-			|| *str == '#' || *str == '-') {
-				buf[len] = *str; len++;
-			}
+			|| *str == '#' || *str == '-')
+				{buf[len] = *str; len++;}
 			str++;
 		}
 		break;
@@ -308,19 +298,16 @@ strip_color_line(const char *str, char mode)
 			if ((*str >= '0' && *str <= '9') || (*str >= 'a' && *str <= 'z')
 			|| (*str >= 'A' && *str <= 'Z') || *str == '*' || *str == '.'
 			|| *str == '=' || *str == ';' || *str == ':'
-			|| *str == '#' || *str == '-') {
-				buf[len] = *str; len++;
-			}
+			|| *str == '#' || *str == '-')
+				{buf[len] = *str; len++;}
 			str++;
 		}
 		break;
 	default: break;
 	}
 
-	if (!len || !*buf) {
-		free(buf);
-		return (char *)NULL;
-	}
+	if (!len || !*buf)
+		{free(buf); return (char *)NULL;}
 
 	buf[len] = '\0';
 	return buf;
@@ -431,6 +418,30 @@ unset_suggestions_color(void)
 	strcpy(sx_c, SUG_NO_COLOR); /* internal commands and params */
 }
 
+/* Import the color scheme NAME from DATADIR (usually /usr/local/share)
+ * Return zero on success or one on failure */
+int
+import_color_scheme(const char *name)
+{
+	if (!data_dir || !*data_dir || !colors_dir || !*colors_dir
+	|| !name || !*name)
+		return EXIT_FAILURE;
+
+	char dfile[PATH_MAX];
+//	snprintf(dfile, PATH_MAX - 1, "%s/%s/colors/%s.cfm", data_dir, PNL, name);
+	snprintf(dfile, PATH_MAX - 1, "%s/%s/colors/%s.clifm", data_dir, PNL, name);
+
+	struct stat attr;
+	if (stat(dfile, &attr) == -1)
+		return EXIT_FAILURE;
+
+	char *cmd[] = {"cp", dfile, colors_dir, NULL};
+	if (launch_execve(cmd, FOREGROUND, E_NOFLAG) == EXIT_SUCCESS)
+		return EXIT_SUCCESS;
+
+	return EXIT_FAILURE;
+}
+
 #ifndef CLIFM_SUCKLESS
 static int
 print_cur_colorscheme(void)
@@ -450,26 +461,30 @@ print_cur_colorscheme(void)
 	return EXIT_SUCCESS;
 }
 
+/* Edit the current color scheme file
+ * If the file is not in the local colors dir, try to copy it from DATADIR
+ * into the local dir to avoid permission issues */
 static int
 edit_colorscheme(char *app)
 {
-	char file[PATH_MAX];
-	snprintf(file, PATH_MAX - 1, "%s/%s.cfm", colors_dir, cur_cscheme); /* NOLINT */
+	if (!colors_dir) {
+		fprintf(stderr, _("%s: No color scheme found\n"), PROGRAM_NAME);
+		return EXIT_FAILURE;
+	}
+
+	if (!cur_cscheme) {
+		fprintf(stderr, _("%s: Current color scheme is unknown\n"), PROGRAM_NAME);
+		return EXIT_FAILURE;
+	}
+
 	struct stat attr;
-	if (stat(file, &attr) == -1) {
-		if (data_dir) {
-			snprintf(file, PATH_MAX - 1, "%s/%s/colors/%s.cfm", /* NOLINT */
-					data_dir, PNL, cur_cscheme);
-			if (access(file, W_OK) == -1) {
-				fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME,
-						file, strerror(errno));
-				return EXIT_FAILURE;
-			}
-		} else {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME,
-					file, strerror(errno));
-			return EXIT_FAILURE;
-		}
+	char file[PATH_MAX];
+
+//	snprintf(file, PATH_MAX - 1, "%s/%s.cfm", colors_dir, cur_cscheme); /* NOLINT */
+	snprintf(file, PATH_MAX - 1, "%s/%s.clifm", colors_dir, cur_cscheme); /* NOLINT */
+	if (stat(file, &attr) == -1 && import_color_scheme(cur_cscheme) != EXIT_SUCCESS) {
+		fprintf(stderr, _("%s: %s: No such color scheme\n"), PROGRAM_NAME, cur_cscheme);
+		return EXIT_FAILURE;
 	}
 
 	stat(file, &attr);
@@ -491,10 +506,8 @@ edit_colorscheme(char *app)
 	if (ret != EXIT_FAILURE) {
 		stat(file, &attr);
 		if (mtime_bfr != (time_t)attr.st_mtime
-		&& set_colors(cur_cscheme, 0) == EXIT_SUCCESS && autols) {
-			free_dirlist();
-			list_dir();
-		}
+		&& set_colors(cur_cscheme, 0) == EXIT_SUCCESS && autols == 1)
+			reload_dirlist();
 	}
 
 	return ret;
@@ -509,6 +522,7 @@ set_colorscheme(char *arg)
 		|| strcmp(arg, color_schemes[i]) != 0)
 			continue;
 		cs_found = 1;
+
 		if (set_colors(arg, 0) != EXIT_SUCCESS)
 			continue;
 		cur_cscheme = color_schemes[i];
@@ -521,7 +535,7 @@ set_colorscheme(char *arg)
 		return EXIT_SUCCESS;
 	}
 
-	if (!cs_found)
+	if (cs_found == 0)
 		fprintf(stderr, _("%s: No such color scheme\n"), PROGRAM_NAME);
 
 	return EXIT_FAILURE;
@@ -533,12 +547,12 @@ cschemes_function(char **args)
 {
 #ifdef CLIFM_SUCKLESS
 	UNUSED(args);
-	printf("%s: color schemes: %s. Edit settings.h in the source code "
+	printf("%s: colors: %s. Edit settings.h in the source code "
 		"and recompile\n", PROGRAM_NAME, NOT_AVAILABLE);
 	return EXIT_FAILURE;
 #else
 	if (xargs.stealth_mode == 1) {
-		fprintf(stderr, _("%s: color schemes: %s\nTIP: To change the "
+		fprintf(stderr, _("%s: colors: %s\nTIP: To change the "
 			"current color scheme use the following environment "
 			"variables: CLIFM_FILE_COLORS, CLIFM_IFACE_COLORS, "
 			"and CLIFM_EXT_COLORS\n"), PROGRAM_NAME, STEALTH_DISABLED);
@@ -550,16 +564,11 @@ cschemes_function(char **args)
 		return EXIT_FAILURE;
 	}
 
-	if (!args)
-		return EXIT_FAILURE;
+	if (!args) return EXIT_FAILURE;
 
-	if (!args[1])
-		return print_cur_colorscheme();
+	if (!args[1]) return print_cur_colorscheme();
 
-	if (IS_HELP(args[1])) {
-		puts(_(CS_USAGE));
-		return EXIT_SUCCESS;
-	}
+	if (IS_HELP(args[1])) { puts(_(CS_USAGE)); return EXIT_SUCCESS;	}
 
 	if (*args[1] == 'e' && (!args[1][1] || strcmp(args[1], "edit") == 0))
 		return edit_colorscheme(args[2]);
@@ -610,7 +619,7 @@ set_color(char *_color, int offset, char var[], int flag)
 	if (flag == RL_NO_PRINTABLE)
 		snprintf(var, MAX_COLOR + 2, "\001\x1b[%sm\002", s ? s : p); /* NOLINT */
 	else
-		snprintf(var, MAX_COLOR - 1, "\x1b[%sm", s ? s : p); /* NOLINT */
+		snprintf(var, MAX_COLOR - 1, "\x1b[0;%sm", s ? s : p); /* NOLINT */
 }
 
 static void
@@ -892,7 +901,9 @@ set_default_colors(void)
 
 	if (!*el_c) strcpy(el_c, DEF_EL_C);
 	if (!*mi_c) strcpy(mi_c, DEF_MI_C);
-	if (!*dl_c) strcpy(dl_c, DEF_DL_C);
+	/* If unset from the config file, use current workspace color */
+	if (!*dl_c && config_ok == 0) strcpy(dl_c, DEF_DL_C);
+
 	if (!*df_c) strcpy(df_c, DEF_DF_C);
 	if (!*fc_c) strcpy(fc_c, DEF_FC_C);
 	if (!*wc_c) strcpy(wc_c, DEF_WC_C);
@@ -975,6 +986,9 @@ free_extension_colors(void)
 static int
 get_cur_colorscheme(const char *colorscheme)
 {
+	if (!colorscheme)
+		return EXIT_FAILURE;
+
 	char *def_cscheme = (char *)NULL;
 	int i = (int)cschemes_n;
 	while (--i >= 0) {
@@ -990,7 +1004,7 @@ get_cur_colorscheme(const char *colorscheme)
 	}
 
 	if (!cur_cscheme) {
-		_err('w', PRINT_PROMPT, _("%s: %s: No such color scheme. "
+		_err('w', PRINT_PROMPT, _("%s: colors: %s: No such color scheme. "
 			"Falling back to default\n"), PROGRAM_NAME, colorscheme);
 
 		if (def_cscheme)
@@ -1080,34 +1094,34 @@ get_colors_from_file(const char *colorscheme, char **filecolors,
 
 	char colorscheme_file[PATH_MAX];
 	*colorscheme_file = '\0';
-	if (config_ok) {
-		snprintf(colorscheme_file, PATH_MAX - 1, "%s/%s.cfm", colors_dir, /* NOLINT */
+	if (config_ok == 1 && colors_dir) {
+//		snprintf(colorscheme_file, PATH_MAX - 1, "%s/%s.cfm", colors_dir, /* NOLINT */
+		snprintf(colorscheme_file, PATH_MAX - 1, "%s/%s.clifm", colors_dir, /* NOLINT */
 			colorscheme ? colorscheme : "default");
 	}
 
 	/* If not in local dir, check system data dir as well */
 	struct stat attr;
 	if (data_dir && (!*colorscheme_file || stat(colorscheme_file, &attr) == -1)) {
-		snprintf(colorscheme_file, PATH_MAX - 1, "%s/%s/colors/%s.cfm", /* NOLINT */
+//		snprintf(colorscheme_file, PATH_MAX - 1, "%s/%s/colors/%s.cfm", /* NOLINT */
+		snprintf(colorscheme_file, PATH_MAX - 1, "%s/%s/colors/%s.clifm", /* NOLINT */
 			data_dir, PNL, colorscheme ? colorscheme : "default");
 	}
 
 	FILE *fp_colors = fopen(colorscheme_file, "r");
 	if (!fp_colors) {
 		if (!env) {
-			fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME,
-			    colorscheme_file, strerror(errno));
+			_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: colors: %s: %s\n", PROGRAM_NAME,
+				colorscheme_file, strerror(errno));
 			return EXIT_FAILURE;
 		} else {
-			_err('w', PRINT_PROMPT, _("%s: %s: No such color scheme. "
-				"Falling back to the default one\n"), PROGRAM_NAME,
-				colorscheme);
+			_err('w', PRINT_PROMPT, _("%s: colors: %s: No such color scheme. "
+				"Falling back to the default one\n"), PROGRAM_NAME, colorscheme);
 			return EXIT_SUCCESS;
 		}
 	}
 
-	/* If called from the color scheme function, reset all
-	 * color values before proceeding */
+	/* If called from the color scheme function, reset all color values before proceeding */
 	if (!env) {
 		reset_filetype_colors();
 		reset_iface_colors();
@@ -1136,6 +1150,7 @@ get_colors_from_file(const char *colorscheme, char **filecolors,
 			continue;
 		}
 
+		/* THIS OPTION IS DEPRECATED */
 		else if (*line == 'P' && strncmp(line, "PromptStyle=", 12) == 0) {
 			char *p = strchr(line, '=');
 			if (!p || !*(++p))
@@ -1143,6 +1158,21 @@ get_colors_from_file(const char *colorscheme, char **filecolors,
 			if (*p == 'd' && strncmp(p, "default", 7) == 0)
 				prompt_notif = 1;
 			else if (*p == 'c' && strncmp(p, "custom", 6) == 0)
+				prompt_notif = 0;
+			else
+				prompt_notif = DEF_PROMPT_NOTIF;
+		}
+
+		/* The following values override those set via the Prompt line
+		 * (provided it was set to a valid prompt name, as defined in the
+		 * prompts file)*/
+		else if (*line == 'N' && strncmp(line, "Notifications=", 14) == 0) {
+			char *p = strchr(line, '=');
+			if (!p || !*(++p))
+				continue;
+			if (*p == 't' && strncmp(p, "true", 4) == 0)
+				prompt_notif = 1;
+			else if (*p == 'f' && strncmp(p, "false", 5) == 0)
 				prompt_notif = 0;
 			else
 				prompt_notif = DEF_PROMPT_NOTIF;
@@ -1159,8 +1189,8 @@ get_colors_from_file(const char *colorscheme, char **filecolors,
 			right_prompt = savestring(q, strlen(q));
 		} */
 
-		else if (xargs.warning_prompt == UNSET && *line == 'W'
-		&& strncmp(line, "WarningPrompt=", 14) == 0) {
+		else if (xargs.warning_prompt == UNSET && *line == 'E'
+		&& strncmp(line, "EnableWarningPrompt=", 20) == 0) {
 			char *p = strchr(line, '=');
 			if (!p || !*(++p))
 				continue;
@@ -1172,7 +1202,7 @@ get_colors_from_file(const char *colorscheme, char **filecolors,
 				warning_prompt = DEF_WARNING_PROMPT;
 		}
 
-		else if (*line == 'W' && strncmp(line, "WarningPromptStr=", 17) == 0) {
+		else if (*line == 'W' && strncmp(line, "WarningPrompt=", 14) == 0) {
 			char *p = strchr(line, '=');
 			if (!p || !*p || !*(++p))
 				continue;
@@ -1572,25 +1602,24 @@ set_colors(const char *colorscheme, const int env)
 	return EXIT_SUCCESS;
 }
 
-/* Print ENTRY using color codes and I as ELN, right padding PAD
+/* Print ENTRY using color codes and ELN as ELN, right padding PAD
  * chars and terminating ENTRY with or without a new line char (NEW_LINE
- * 1 or 0 respectivelly) */
+ * 1 or 0 respectivelly)
+ * ELN could be:
+ * > 0: The ELN of a file in CWD
+ * -1: Error getting ELN
+ * 0: ELN should not be printed, for example, when listing files not in CWD */
 void
-colors_list(char *ent, const int i, const int pad, const int new_line)
+colors_list(char *ent, const int eln, const int pad, const int new_line)
 {
-	size_t i_digits = (size_t)DIGINUM(i);
+	char index[sizeof(int) + 8];
+	*index = '\0';
 
-	/* Num (i) + space + null byte */
-	char *index = (char *)xnmalloc(i_digits + 2, sizeof(char));
-
-	if (i > 0) /* When listing files in CWD */
-		sprintf(index, "%d ", i); /* NOLINT */
-	else if (i == -1) /* ELN for entry could not be found */
+	if (eln > 0)
+		sprintf(index, "%d ", eln); /* NOLINT */
+	else if (eln == -1)
 		sprintf(index, "? "); /* NOLINT */
 	else
-	/* When listing files NOT in CWD (called from search function and
-	 * first argument is a path: "/search_str /path") 'i' is zero. In
-	 * this case, no index should be printed at all */
 		index[0] = '\0';
 
 	struct stat attr;
@@ -1599,25 +1628,24 @@ colors_list(char *ent, const int i, const int pad, const int new_line)
 
 	if (*q == '~') {
 		if (!*(q + 1) || (*(q + 1) == '/' && !*(q + 2)))
-			strncpy(t, user.home, PATH_MAX - 1);
+			xstrsncpy(t, user.home, PATH_MAX - 1);
 		else
 			snprintf(t, PATH_MAX, "%s/%s", user.home, q + 2);
 		p = t;
 	}
 
-	size_t elen = strlen(p);
+	size_t len = strlen(p);
 	int rem_slash = 0;
 	/* Remove the ending slash: lstat() won't take a symlink to dir as
 	 * a symlink (but as a dir), if the file name ends with a slash */
-	if (p[elen - 1] == '/') {
-		p[elen - 1] = '\0';
+	if (len > 1 && p[len - 1] == '/') {
+		p[len - 1] = '\0';
 		rem_slash = 1;
 	}
 
 	int ret = lstat(p, &attr);
-//	int ret = lstat(ent, &attr);
 	if (rem_slash)
-		p[elen - 1] = '/';
+		p[len - 1] = '/';
 
 	char *wname = (char *)NULL;
 	size_t wlen = wc_xstrlen(ent);
@@ -1627,90 +1655,47 @@ colors_list(char *ent, const int i, const int pad, const int new_line)
 	if (ret == -1) {
 		fprintf(stderr, "%s%s%s%s%-*s%s%s", eln_color, index, df_c,
 		    uf_c, pad, wname ? wname : ent, df_c, new_line ? "\n" : "");
-		free(index);
 		free(wname);
 		return;
 	}
 
-	char *linkname = (char *)NULL;
-	char ext_color[MAX_COLOR];
-	char *color = fi_c;
-
-#ifdef _LINUX_CAP
-	cap_t cap;
-#endif
+	char *color = fi_c, ext_color[MAX_COLOR];
 
 	switch (attr.st_mode & S_IFMT) {
-
 	case S_IFREG:
-		if (!check_file_access(&attr)) {
+		if (light_mode == 1 || colorize == 0) {
+			color = fi_c;
+		} else if (check_file_access(&attr) == 0) {
 			color = nf_c;
-		} else if (attr.st_mode & S_ISUID) { /* set uid file */
-			color = su_c;
-		} else if (attr.st_mode & S_ISGID) { /* set gid file */
-			color = sg_c;
 		} else {
-#ifdef _LINUX_CAP
-			cap = cap_get_file(ent);
-			if (cap) {
-				color = ca_c;
-				cap_free(cap);
-			} else if (attr.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) {
-#else
-			if (attr.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) {
-#endif
-				if (FILE_SIZE == 0)
-					color = ee_c;
-				else
-					color = ex_c;
-			} else if (FILE_SIZE == 0) {
-				color = ef_c;
-			} else if (attr.st_nlink > 1) {
-				color = mh_c;
-			} else {
-				char *ext = (strrchr(ent, '.'));
-				if (ext) {
-					char *extcolor = get_ext_color(ext);
-					if (extcolor) {
-						snprintf(ext_color, MAX_COLOR, "\x1b[%sm", /* NOLINT */
-						    extcolor);
-						color = ext_color;
-						extcolor = (char *)NULL;
-					}
-					ext = (char *)NULL;
-				}
-			}
-		}
+			color = get_file_color(ent, &attr);
+			if (light_mode == 1 || color != fi_c)
+				break;
+			char *ext = check_ext == 1 ? strrchr(ent, '.') : (char *)NULL;
+			if (!ext) break;
+			char *extcolor = get_ext_color(ext);
+			ext = (char *)NULL;
+			if (!extcolor) break;
 
+			snprintf(ext_color, MAX_COLOR, "\x1b[%sm", extcolor); // NOLINT
+			color = ext_color;
+			extcolor = (char *)NULL;
+		}
 		break;
 
 	case S_IFDIR:
-		if (!check_file_access(&attr)) {
+		if (light_mode == 1 || colorize == 0)
+			color = di_c;
+		else if (check_file_access(&attr) == 0)
 			color = nd_c;
-		} else {
-			int is_oth_w = 0;
-
-			if (attr.st_mode & S_IWOTH)
-				is_oth_w = 1;
-
-			int files_dir = count_dir(ent, NO_CPOP);
-
-			color = (attr.st_mode & S_ISVTX) ? (is_oth_w
-					? tw_c : st_c) : (is_oth_w ? ow_c :
-					/* If folder is empty, it contains only "."
-					 * and ".." (2 elements). If not mounted (ex:
-					 * /media/usb) the result will be zero. */
-					(files_dir == 2 || files_dir == 0) ? ed_c : di_c);
-		}
+		else
+			color = get_dir_color(ent, attr.st_mode, attr.st_nlink);
 		break;
 
-	case S_IFLNK:
-		linkname = realpath(ent, NULL);
-		if (linkname) {
-			color = ln_c;
-			free(linkname);
-		} else {
-			color = or_c;
+	case S_IFLNK: {
+		char *linkname = realpath(ent, NULL);
+		color = linkname ? ln_c : or_c;
+		free(linkname);
 		}
 		break;
 
@@ -1718,15 +1703,18 @@ colors_list(char *ent, const int i, const int pad, const int new_line)
 	case S_IFBLK: color = bd_c; break;
 	case S_IFCHR: color = cd_c; break;
 	case S_IFSOCK: color = so_c; break;
-	/* In case all the above conditions are false... */
 	default: color = no_c; break;
 	}
 
+	char *name = wname ? wname : ent;
+	char *tmp = (flags & IN_SELBOX_SCREEN) ? abbreviate_file_name(name) : name;
+
 	printf("%s%s%s%s%s%s%s%-*s", eln_color, index, df_c, color,
-	    (wname ? wname : ent) + tab_offset, df_c,
-	    new_line ? "\n" : "", pad, "");
-	free(index);
+		tmp + tab_offset, df_c, new_line ? "\n" : "", pad, "");
 	free(wname);
+
+	if ((flags & IN_SELBOX_SCREEN) && tmp != name)
+		free(tmp);
 }
 
 #ifndef CLIFM_SUCKLESS
@@ -1742,12 +1730,14 @@ get_colorschemes(void)
 	if (colors_dir && stat(colors_dir, &attr) == EXIT_SUCCESS) {
 		schemes_total = count_dir(colors_dir, NO_CPOP) - 2;
 		if (schemes_total) {
+			if (!(dir_p = opendir(colors_dir))) {
+				_err('e', PRINT_PROMPT, "opendir: %s: %s\n", colors_dir, strerror(errno));
+				return 0;
+			}
+
 			color_schemes = (char **)xrealloc(color_schemes,
 							((size_t)schemes_total + 2) * sizeof(char *));
 
-			/* count_dir already opened and read this directory succesfully,
-			 * so that we don't need to check opendir for errors */
-			dir_p = opendir(colors_dir);
 			while ((ent = readdir(dir_p)) != NULL) {
 				/* Skipp . and .. */
 				char *name = ent->d_name;
@@ -1756,8 +1746,9 @@ get_colorschemes(void)
 
 				char *ret = strchr(name, '.');
 				/* If the file contains not dot, or if its extension is not
-				 * .cfm, or if it's just a hidden file named ".cfm", skip it */
-				if (!ret || strcmp(ret, ".cfm") != 0 || ret == name)
+				 * .clifm, or if it's just a hidden file named ".clifm", skip it */
+//				if (!ret || strcmp(ret, ".cfm") != 0 || ret == name)
+				if (!ret || strcmp(ret, ".clifm") != 0 || ret == name)
 					continue;
 
 				*ret = '\0';
@@ -1785,12 +1776,16 @@ get_colorschemes(void)
 	if (schemes_total <= total_tmp)
 		return i;
 
+	if (!(dir_p = opendir(sys_colors_dir))) {
+		_err('e', PRINT_PROMPT, "opendir: %s: %s\n", sys_colors_dir, strerror(errno));
+		return i;
+	}
+
 	color_schemes = (char **)xrealloc(color_schemes,
 					((size_t)schemes_total + 2) * sizeof(char *));
 
 	size_t i_tmp = i;
 
-	dir_p = opendir(sys_colors_dir);
 	while ((ent = readdir(dir_p)) != NULL) {
 		/* Skipp . and .. */
 		char *name = ent->d_name;
@@ -1799,8 +1794,9 @@ get_colorschemes(void)
 
 		char *ret = strchr(name, '.');
 		/* If the file contains not dot, or if its extension is not
-		 * .cfm, or if it's just a hidden file named ".cfm", skip it */
-		if (!ret || ret == name || strcmp(ret, ".cfm") != 0)
+		 * .clifm, or if it's just a hidden file named ".clifm", skip it */
+//		if (!ret || ret == name || strcmp(ret, ".cfm") != 0)
+		if (!ret || ret == name || strcmp(ret, ".clifm") != 0)
 			continue;
 
 		*ret = '\0';
@@ -1814,7 +1810,7 @@ get_colorschemes(void)
 			}
 		}
 
-		if (dup)
+		if (dup == 1)
 			continue;
 
 		color_schemes[i] = savestring(name, strlen(name));
@@ -1848,13 +1844,12 @@ print_color_blocks(void)
 void
 color_codes(void)
 {
-	if (!colorize) {
-		printf(_("%s: Currently running without colors\n"),
-		    PROGRAM_NAME);
+	if (colorize == 0) {
+		printf(_("%s: Currently running without colors\n"), PROGRAM_NAME);
 		return;
 	}
 
-	if (ext_colors_n)
+	if (ext_colors_n > 0)
 		printf(_("%sFile type colors%s\n\n"), BOLD, df_c);
 	printf(_(" %sfile name%s: nd: Directory with no read permission\n"),
 	    nd_c, df_c);
@@ -1902,7 +1897,7 @@ color_codes(void)
 		 "By default, %s uses only 8/16 colors, but you can use 256 "
 		 "and RGB/true colors as well.\n\n"), PROGRAM_NAME);
 
-	if (ext_colors_n) {
+	if (ext_colors_n > 0) {
 		size_t i, j;
 		printf(_("%sExtension colors%s\n\n"), BOLD, df_c);
 		for (i = 0; i < ext_colors_n; i++) {

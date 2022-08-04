@@ -59,17 +59,22 @@ change_word_color(const char *_last_word, const int offset, const char *color)
 	fputs("\x1b[?25h", stdout);
 } */
 
-/* Get the appropriate color for C and print the color (returning a null
- * pointer) if SET_COLOR is set to 1; otherwise, just return a pointer
- * to the corresponding color. This function is used to colorize input,
- * history entries, and accepted suggestions */
+/* Get the appropriate color for the character at position POS in the string STR
+ * and print the color if SET_COLOR is set to 1 (in which case NULL is returned);
+ * otherwise, just return a pointer to the corresponding color.
+ * This function is used to colorize input, history entries, and accepted suggestions */
 char *
 rl_highlight(char *str, const size_t pos, const int flag)
 {
 	char *cl = (char *)NULL;
-	/* PREV is -1 when there is no previous char (STR[POS] is the first) */
+	/* PREV is 0 when there is no previous char (STR[POS] is the first one) */
 	char prev = pos ? str[pos - 1] : 0;
 	char c = *(str + pos);
+
+	if (wrong_cmd == 1 && cur_color == hw_c && rl_end == 0) {
+		fputs(tx_c, stdout); fflush(stdout);
+		rl_redisplay();
+	}
 
 	if ((rl_end == 0 && c == BS) || prev == '\\') {
 		if (prev == '\\')
@@ -85,14 +90,25 @@ rl_highlight(char *str, const size_t pos, const int flag)
 	if (cur_color == hw_c && !sp)
 		goto END;
 
-/*	if (!sp)
-		wrong_cmd_line = 0; */
-
 	if (*rl_line_buffer != ';' && *rl_line_buffer != ':'
 	&& cur_color != hq_c && c >= '0' && c <= '9') {
-		if (prev == ' ' || cur_color == hn_c || rl_end == 1) {
+/*		if (prev == ' ' || cur_color == hn_c || rl_end == 1) {
 			cl = hn_c;
 			goto END;
+		} */
+// TESTING! HIGHLIGHT
+		if (prev == ' ' || prev == 0 || cur_color == hn_c || rl_end == 1) {
+			char *a = strchr(str + pos, ' ');
+			if (a) {
+				*a = '\0';
+				if (is_number(str + pos))
+					cl = hn_c;
+				*a = ' ';
+			} else {
+				cl = hn_c;
+			}
+			goto END;
+// TESTING! HIGHLIGHT
 		} else {
 			char cc = c;
 			*(str + pos) = '\0';
@@ -171,7 +187,12 @@ rl_highlight(char *str, const size_t pos, const int flag)
 		if (prev == ' ' || prev == 0)
 			cl = (cur_color != hq_c) ? hp_c : (char *)NULL;
 		break;
-	case '#': cl = (cur_color != hq_c) ? hc_c : (char *)NULL; break;
+	case '#':
+		if (prev == ' ' || prev == 0)
+			cl = (cur_color != hq_c) ? hc_c : (char *)NULL;
+		else
+			cl = tx_c;
+		break;
 	default:
 		if (cur_color != hq_c && cur_color != hc_c
 		&& cur_color != hv_c && cur_color != hp_c)
@@ -213,8 +234,8 @@ recolorize_line(void)
 		fputs(tx_c, stdout);
 	}
 
-	int bk = rl_point;
-	if (rl_point && rl_point != rl_end)
+	int bk_point = rl_point;
+	if (rl_point > 0 && rl_point != rl_end)
 		rl_point--;
 
 	/* Get the current color up to the current cursor position */
@@ -234,19 +255,32 @@ recolorize_line(void)
 		return;
 	}
 
-	int point = rl_point;
-	int copy_start = point ? point - 1 : 0;
+	int end_bk = rl_end;
+	int start = rl_point > 0 ? rl_point - 1 : 0;
+	char *ss = rl_copy_text(start, rl_end);
+	rl_delete_text(start, rl_end);
+	rl_point = rl_end = start;
+// TESTING HIGHLIGHT!
+	if (start == 0 && end_bk > 1)
+		/* First char of a non-empty recolored line (recovering from wrong cmd) */
+		rl_redisplay();
+// TESTING HIGHLIGHT!
+	i = 0;
+
+/*	int point = rl_point;
+	int copy_start = point > 0 ? point - 1 : 0;
 	int start = point;
 	char *ss = rl_copy_text(copy_start, rl_end);
 	rl_delete_text(start, rl_end);
 	rl_point = rl_end = start;
-	/* Loop through each char from cursor position onward and colorize it */
-	i = point ? 1 : 0;
+	i = point ? 1 : 0; */
+
 	size_t l = 0;
 
 	if (!ss || !*ss)
 		goto EXIT;
 
+	// Loop through each char from cursor position onward and colorize it
 	char t[PATH_MAX];
 	for (;ss[i]; i++) {
 		rl_highlight(ss, i, SET_COLOR);
@@ -269,7 +303,7 @@ recolorize_line(void)
 	}
 
 EXIT:
-	fputs(UNHIDE_CURSOR, stdout);
 	free(ss);
-	rl_point = bk;
+	rl_point = bk_point;
+	fputs(UNHIDE_CURSOR, stdout);
 }

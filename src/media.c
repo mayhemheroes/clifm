@@ -47,6 +47,7 @@
 #include "exec.h"
 #include "listing.h"
 #include "jump.h"
+#include "misc.h"
 #include "checks.h"
 #include "history.h"
 
@@ -315,15 +316,13 @@ list_unmounted_devs(void)
 	media[mp_n].mnt = (char *)NULL;
 	media[mp_n].label = (char *)NULL;
 }
-#endif /* __linux__ */
 
 static int
 list_mounted_devs(int mode)
 {
 	FILE *fp = fopen("/proc/mounts", "r");
 	if (!fp) {
-		fprintf(stderr, "%s: mp: fopen: /proc/mounts: %s\n",
-				PROGRAM_NAME, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "mp: fopen: /proc/mounts: %s\n", strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -403,7 +402,8 @@ mount_dev(int n)
 	}
 
 	char file[PATH_MAX];
-	snprintf(file, PATH_MAX, "%s/clifm.XXXXXX", P_tmpdir);
+	snprintf(file, PATH_MAX, "%s/%s", xargs.stealth_mode == 1
+		? P_tmpdir : tmp_dir, TMP_FILENAME);
 
 	int fd = mkstemp(file);
 	if (fd == -1)
@@ -444,7 +444,7 @@ mount_dev(int n)
 	/* Recover the mountpoint used by the mounting command */
 	char *p = strstr(out_line, " at ");
 	if (!p || *(p + 4) != '/') {
-		fprintf(stderr, _("%s: Error retrieving mountpoint\n"), PROGRAM_NAME);
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Error retrieving mountpoint\n"), PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
 	p += 4;
@@ -457,6 +457,7 @@ mount_dev(int n)
 
 	return EXIT_SUCCESS;
 }
+#endif /* __linux__ */
 
 static void
 free_media(void)
@@ -514,7 +515,7 @@ media_menu(int mode)
 #endif
 
 	if (mode == MEDIA_MOUNT && xargs.mount_cmd == UNSET) {
-		fprintf(stderr, _("%s: No mount command found. Install either "
+		fprintf(stderr, _("%s: media: No mount command found. Install either "
 				"udevil or udisks2\n"), PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
@@ -677,7 +678,8 @@ media_menu(int mode)
 #endif /* __linux__ */
 
 	if (xchdir(media[n].mnt, SET_TITLE) != EXIT_SUCCESS) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, media[n].mnt, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
+			media[n].mnt, strerror(errno));
 		exit_status = EXIT_FAILURE;
 		goto EXIT;
 	}
@@ -685,11 +687,8 @@ media_menu(int mode)
 	free(workspaces[cur_ws].path);
 	workspaces[cur_ws].path = savestring(media[n].mnt, strlen(media[n].mnt));
 
-	if (autols == 1) {
-		free_dirlist();
-		if (list_dir() != EXIT_SUCCESS)
-			exit_status = EXIT_FAILURE;
-	}
+	if (autols == 1)
+		reload_dirlist();
 
 	add_to_dirhist(workspaces[cur_ws].path);
 	add_to_jumpdb(workspaces[cur_ws].path);

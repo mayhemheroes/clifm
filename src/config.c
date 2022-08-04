@@ -65,14 +65,14 @@ static int
 regen_config(void)
 {
 	int config_found = 1;
-	struct stat config_attrib;
+	struct stat attr;
 
-	if (stat(config_file, &config_attrib) == -1) {
+	if (stat(config_file, &attr) == -1) {
 		puts(_("No configuration file found"));
 		config_found = 0;
 	}
 
-	if (config_found) {
+	if (config_found == 1) {
 		time_t rawtime = time(NULL);
 		struct tm t;
 		localtime_r(&rawtime, &t);
@@ -104,13 +104,12 @@ regen_config(void)
 
 /* Edit the config file, either via the mime function or via the first
  * passed argument (Ex: 'edit nano'). The 'gen' option regenerates
- * the configuration file and creates a back up of the old one. */
+ * the configuration file and creates a back up of the old one */
 int
 edit_function(char **comm)
 {
 	if (xargs.stealth_mode == 1) {
-		printf(_("%s: Access to configuration files is not allowed in "
-			 "stealth mode\n"), PROGRAM_NAME);
+		printf("%s: %s\n", PROGRAM_NAME, STEALTH_DISABLED);
 		return EXIT_SUCCESS;
 	}
 
@@ -122,19 +121,18 @@ edit_function(char **comm)
 	if (comm[1] && *comm[1] == 'r' && strcmp(comm[1], "reset") == 0)
 		return regen_config();
 
-	if (!config_ok) {
-		fprintf(stderr, _("%s: Cannot access the configuration file\n"),
-		    PROGRAM_NAME);
+	if (config_ok == 0) {
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, _("%s: Cannot access the configuration file\n"),
+			PROGRAM_NAME);
 		return EXIT_FAILURE;
 	}
 
 	/* Get modification time of the config file before opening it */
 	struct stat attr;
 
-	/* If, for some reason (like someone erasing the file while the
-	 * program is running) clifmrc doesn't exist, recreate the
-	 * configuration file. Then run 'stat' again to reread the attributes
-	 * of the file */
+	/* If, for some reason (like someone erasing the file while the program
+	 * is running) clifmrc doesn't exist, recreate the configuration file.
+	 * Then run 'stat' again to reread the attributes of the file */
 	if (stat(config_file, &attr) == -1) {
 		create_config(config_file);
 		stat(config_file, &attr);
@@ -159,15 +157,13 @@ edit_function(char **comm)
 
 	/* Get modification time after opening the config file */
 	stat(config_file, &attr);
-	/* If modification times differ, the file was modified after being
-	 * opened */
-
+	/* If modification times differ, the file was modified after being opened */
 	if (mtime_bfr != (time_t)attr.st_mtime) {
 		/* Reload configuration only if the config file was modified */
 		reload_config();
 		welcome_message = 0;
 
-		if (autols) {
+		if (autols == 1) {
 			free_dirlist();
 			ret = list_dir();
 		}
@@ -177,21 +173,60 @@ edit_function(char **comm)
 	return ret;
 }
 
+/* Find the plugins-helper file and set CLIFM_PLUGINS_HELPER accordingly
+ * This envionment variable will be used by plugins. Returns zero on
+ * success or one on error */
+static int
+setenv_plugins_helper(void)
+{
+	if (getenv("CLIFM_PLUGINS_HELPER"))
+		return EXIT_SUCCESS;
+
+	struct stat attr;
+	if (plugins_dir && *plugins_dir) {
+		char _path[PATH_MAX];
+		snprintf(_path, sizeof(_path), "%s/plugins-helper", plugins_dir);
+
+	//	struct stat attr;
+		if (stat(_path, &attr) != -1 && setenv("CLIFM_PLUGINS_HELPER", _path, 1) == 0)
+			return EXIT_SUCCESS;
+	}
+
+	const char *_paths[] = {
+#ifndef __HAIKU__
+		"/usr/share/clifm/plugins/plugins-helper",
+		"/usr/local/share/clifm/plugins/plugins-helper",
+#else
+		"/boot/system/non-packaged/data/clifm/plugins/plugins-helper",
+		"/boot/system/data/clifm/plugins/plugins-helper",
+#endif
+		NULL};
+
+	size_t i;
+	for (i = 0; _paths[i]; i++) {
+		if (stat(_paths[i], &attr) != -1
+		&& setenv("CLIFM_PLUGINS_HELPER", _paths[i], 1) == 0)
+			return EXIT_SUCCESS;
+	}
+
+	return EXIT_FAILURE;
+}
+
+/* Set a few environment variables, mostly useful to run custom scripts
+ * via the actions function */
 void
 set_env(void)
 {
 	if (xargs.stealth_mode == 1)
 		return;
 
-	/* Set a few environment variables, mostly useful to run custom
-	 * scripts via the actions function */
-	/* CLIFM env variable is set to one when CliFM is running, so that
-	 * external programs can determine if they were spawned by CliFM */
 	setenv("CLIFM", config_dir ? config_dir : "1", 1);
 	setenv("CLIFM_PROFILE", alt_profile ? alt_profile : "default", 1);
 
 	if (sel_file)
 		setenv("CLIFM_SELFILE", sel_file, 1);
+
+	setenv_plugins_helper();
 }
 
 /* Define the file for the Selection Box */
@@ -207,15 +242,17 @@ set_sel_file(void)
 		return;
 
 	if (!share_selbox) {
-		/* Private selection box is stored in the profile
-		 * directory */
-		sel_file = (char *)xnmalloc(config_dir_len + 12, sizeof(char));
-		sprintf(sel_file, "%s/selbox.cfm", config_dir);
+		/* Private selection box is stored in the profile directory */
+/*		sel_file = (char *)xnmalloc(config_dir_len + 12, sizeof(char));
+		sprintf(sel_file, "%s/selbox.cfm", config_dir); */
+		sel_file = (char *)xnmalloc(config_dir_len + 14, sizeof(char));
+		sprintf(sel_file, "%s/selbox.clifm", config_dir);
 	} else {
-		/* Common selection box is stored in the general
-		 * configuration directory */
-		sel_file = (char *)xnmalloc(config_dir_len + 21, sizeof(char));
-		sprintf(sel_file, "%s/.config/%s/selbox.cfm", user.home, PNL);
+		/* Common selection box is stored in the general configuration directory */
+/*		sel_file = (char *)xnmalloc(config_dir_len + 21, sizeof(char));
+		sprintf(sel_file, "%s/.config/%s/selbox.cfm", user.home, PNL); */
+		sel_file = (char *)xnmalloc(config_dir_len + 23, sizeof(char));
+		sprintf(sel_file, "%s/.config/%s/selbox.clifm", user.home, PNL);
 	}
 
 	return;
@@ -224,7 +261,7 @@ set_sel_file(void)
 int
 create_kbinds_file(void)
 {
-	if (!config_ok || !kbinds_file)
+	if (config_ok == 0 || !kbinds_file)
 		return EXIT_FAILURE;
 
 	struct stat attr;
@@ -235,7 +272,8 @@ create_kbinds_file(void)
 	/* If not, try to import it from DATADIR */
 	if (data_dir) {
 		char sys_file[PATH_MAX];
-		snprintf(sys_file, PATH_MAX - 1, "%s/%s/keybindings.cfm", data_dir, PNL);
+//		snprintf(sys_file, PATH_MAX - 1, "%s/%s/keybindings.cfm", data_dir, PNL);
+		snprintf(sys_file, PATH_MAX - 1, "%s/%s/keybindings.clifm", data_dir, PNL);
 		if (stat(sys_file, &attr) == EXIT_SUCCESS) {
 			char *cmd[] = {"cp", sys_file, kbinds_file, NULL};
 			if (launch_execve(cmd, FOREGROUND, E_NOFLAG) == EXIT_SUCCESS)
@@ -246,12 +284,15 @@ create_kbinds_file(void)
 	/* Else, create it */
 	FILE *fp = fopen(kbinds_file, "w");
 	if (!fp) {
-		_err('w', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME, kbinds_file,
-		    strerror(errno));
+		_err('w', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME, kbinds_file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
 	fprintf(fp, "# Keybindings file for %s\n\n\
+# Emacs style key escapes are the simplest way of setting your \n\
+# keybindings. For example, use \"action:\\C-t\" to bind the action name \n\
+# 'action' to Ctrl-t \n\
+# Note: available action names are defined below \n\n\
 # Use the 'kbgen' plugin (compile it first: gcc -o kbgen kbgen.c) to \n\
 # find out the escape code for the key or key sequence you want. Use \n\
 # either octal, hexadecimal codes or symbols.\n\
@@ -273,40 +314,41 @@ create_kbinds_file(void)
 \n\
 # Alt-j\n\
 previous-dir:\\M-j\n\
-# Shift-Left (rxvt)\n\
+# Shift-left (rxvt)\n\
 previous-dir2:\\e[d\n\
-# Shift-Left (xterm)\n\
+# Shift-left (xterm)\n\
 previous-dir3:\\e[2D\n\
-# Shift-Left (others)\n\
+# Shift-left (others)\n\
 previous-dir4:\\e[1;2D\n\
 \n\
 # Alt-k\n\
 next-dir:\\M-k\n\
 # Shift-right (rxvt)\n\
 next-dir2:\\e[c\n\
-# Shift-Right (xterm)\n\
+# Shift-right (xterm)\n\
 next-dir3:\\e[2C\n\
-# Shift-Right (others)\n\
+# Shift-right (others)\n\
 next-dir4:\\e[1;2C\n\
 first-dir:\\C-\\M-j\n\
 last-dir:\\C-\\M-k\n\
 \n\
 # Alt-u\n\
 parent-dir:\\M-u\n\
-# Shift-Up (rxvt)\n\
+# Shift-up (rxvt)\n\
 parent-dir2:\\e[a\n\
-# Shift-Up (xterm)\n\
+# Shift-up (xterm)\n\
 parent-dir3:\\e[2A\n\
-# Shift-Up (others)\n\
+# Shift-up (others)\n\
 parent-dir4:\\e[1;2A\n\
 \n\
 # Alt-e\n\
 home-dir:\\M-e\n\
 # Home key (rxvt)\n\
-home-dir2:\\e[7~\n\
+#home-dir2:\\e[7~\n\
 # Home key (xterm)\n\
-home-dir3:\\e[H\n\
-home-dir4:\n\
+#home-dir3:\\e[H\n\
+# Home key (Emacs term)\n\
+#home-dir4:\\e[1~\n\
 \n\
 # Alt-r\n\
 root-dir:\\M-r\n\
@@ -323,43 +365,47 @@ workspace4:\\M-4\n\
 # Help\n\
 # F1-3\n\
 show-manpage:\\eOP\n\
+show-manpage2:\\e[11~\n\
 show-cmds:\\eOQ\n\
+show-cmds2:\\e[12~\n\
 show-kbinds:\\eOR\n\
-\n\
-prepend-sudo:\\M-v\n\
-create-file:\\M-n\n\
-new-instance:\\C-x\n\
-previous-profile:\\C-\\M-o\n\
-next-profile:\\C-\\M-p\n\
+show-kbinds2:\\e[13~\n\n\
 archive-sel:\\C-\\M-a\n\
-rename-sel:\\C-\\M-r\n\
-remove-sel:\\C-\\M-d\n\
-trash-sel:\\C-\\M-t\n\
-untrash-all:\\C-\\M-u\n\
-paste-sel:\\C-\\M-v\n\
-move-sel:\\C-\\M-n\n\
-export-sel:\\C-\\M-e\n\
-open-sel:\\C-\\M-g\n\
 bookmark-sel:\\C-\\M-b\n\
-toggle-disk-usage:\\C-\\M-i\n\
-toggle-max-name-len:\\C-\\M-l\n\
-refresh-screen:\\C-r\n\
+bookmarks:\\M-b\n\
 clear-line:\\M-c\n\
 clear-msgs:\\M-t\n\
+create-file:\\M-n\n\
+deselect-all:\\M-d\n\
+export-sel:\\C-\\M-e\n\
+dirs-first:\\M-g\n\
+lock:\\M-o\n\
+mountpoints:\\M-m\n\
+move-sel:\\C-\\M-n\n\
+new-instance:\\C-x\n\
+next-profile:\\C-\\M-p\n\
+only-dirs:\\M-,\n\
+open-sel:\\C-\\M-g\n\
+paste-sel:\\C-\\M-v\n\
+prepend-sudo:\\M-v\n\
+previous-profile:\\C-\\M-o\n\
+rename-sel:\\C-\\M-r\n\
+remove-sel:\\C-\\M-d\n\
+refresh-screen:\\C-r\n\
+selbox:\\M-s\n\
+select-all:\\M-a\n\
 show-dirhist:\\M-h\n\
+sort-previous:\\M-z\n\
+sort-next:\\M-x\n\
 toggle-hidden:\\M-i\n\
 toggle-hidden2:\\M-.\n\
 toggle-light:\\M-y\n\
 toggle-long:\\M-l\n\
-sort-previous:\\M-z\n\
-sort-next:\\M-x\n\
-bookmarks:\\M-b\n\
-select-all:\\M-a\n\
-deselect-all:\\M-d\n\
-mountpoints:\\M-m\n\
-folders-first:\\M-g\n\
-selbox:\\M-s\n\
-lock:\\M-o\n\
+toggle-max-name-len:\\C-\\M-l\n\
+toggle-disk-usage:\\C-\\M-i\n\
+toggle-virtualdir-full-paths:\\M-w\n\
+trash-sel:\\C-\\M-t\n\
+untrash-all:\\C-\\M-u\n\n\
 # F6-12\n\
 open-mime:\\e[17~\n\
 open-jump-db:\\e[18~\n\
@@ -367,7 +413,8 @@ edit-color-scheme:\\e[19~\n\
 open-keybinds:\\e[20~\n\
 open-config:\\e[21~\n\
 open-bookmarks:\\e[23~\n\
-quit:\\e[24~\n\n\
+quit:\\e[24~\n\
+\n\
 # Plugins\n\
 # 1) Make sure your plugin is in the plugins directory (or use any of the\n\
 # plugins in there)\n\
@@ -387,20 +434,20 @@ quit:\\e[24~\n\n\
 static int
 import_from_data_dir(char *src_filename, char *dest)
 {
-	if (!data_dir || !src_filename || !dest)
-		return EXIT_FAILURE;
-
-	if (!*data_dir || !*src_filename || !*dest)
+	if (!data_dir || !src_filename || !dest
+	|| !*data_dir || !*src_filename || !*dest)
 		return EXIT_FAILURE;
 
 	struct stat attr;
 	char sys_file[PATH_MAX];
 	snprintf(sys_file, PATH_MAX - 1, "%s/%s/%s", data_dir, PNL, src_filename);
-	if (stat(sys_file, &attr) == EXIT_SUCCESS) {
-		char *cmd[] = {"cp", sys_file, dest, NULL};
-		if (launch_execve(cmd, FOREGROUND, E_NOFLAG) == EXIT_SUCCESS)
-			return EXIT_SUCCESS;
-	}
+	if (stat(sys_file, &attr) == -1)
+		return EXIT_FAILURE;
+
+	char *cmd[] = {"cp", sys_file, dest, NULL};
+	int ret = launch_execve(cmd, FOREGROUND, E_NOFLAG);
+	if (ret == EXIT_SUCCESS)
+		return EXIT_SUCCESS;
 
 	return EXIT_FAILURE;
 }
@@ -414,15 +461,15 @@ create_actions_file(char *file)
 		return EXIT_SUCCESS;
 
 	/* If not, try to import it from DATADIR */
-	if (import_from_data_dir("actions.cfm", file) == EXIT_SUCCESS)
+//	if (import_from_data_dir("actions.cfm", file) == EXIT_SUCCESS)
+	if (import_from_data_dir("actions.clifm", file) == EXIT_SUCCESS)
 		return EXIT_SUCCESS;
 
 	/* Else, create it */
 	int fd;
 	FILE *fp = open_fstream_w(file, &fd);
 	if (!fp) {
-		_err('e', PRINT_PROMPT, "%s: '%s': %s\n", PROGRAM_NAME,
-		    file, strerror(errno));
+		_err('e', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -431,9 +478,9 @@ create_actions_file(char *file)
 		"######################\n\n"
 		"# Define here your custom actions. Actions are "
 		"custom command names\n"
-		"# bound to a executable file located either in "
+		"# bound to an executable file located either in "
 		"DATADIR/clifm/plugins\n"
-		"# (usually /usr/share/clifm/plugins) or in "
+		"# (usually /usr/local/share/clifm/plugins) or in "
 		"$XDG_CONFIG_HOME/clifm/plugins.\n"
 		"# Actions can be executed directly from "
 		"%s command line, as if they\n"
@@ -442,29 +489,31 @@ create_actions_file(char *file)
 		"# instead. All parameters passed to the action "
 		"command will be passed\n"
 		"# to the corresponding plugin as well.\n\n"
-		"i=img_viewer.sh\n"
-		"kbgen=kbgen\n"
-		"vid=vid_viewer.sh\n"
-		"ptot=pdf_viewer.sh\n"
-		"music=music_player.sh\n"
-		"update=update.sh\n"
-		"wall=wallpaper_setter.sh\n"
-		"da=disk_analyzer.sh"
-		"dr=dragondrop.sh\n"
-		"fdups=fdups.sh\n"
-		"bn=batch_create.sh\n"
-		"cr=cprm.sh\n"
-		"rrm=recur_rm.sh\n"
 		"+=finder.sh\n"
 		"++=jumper.sh\n"
 		"-=fzfnav.sh\n"
 		"*=fzfsel.sh\n"
 		"**=fzfdesel.sh\n"
-		"h=fzfhist.sh\n"
-		"dh=fzfdirhist.sh\n"
 		"//=rgfind.sh\n"
 		"_=fzcd.sh\n"
-		"ih=ihelp.sh\n",
+		"bn=batch_create.sh\n"
+		"cr=cprm.sh\n"
+		"da=disk_analyzer.sh\n"
+		"dh=fzfdirhist.sh\n"
+		"dr=dragondrop.sh\n"
+		"fdups=fdups.sh\n"
+		"gg=pager.sh\n"
+		"h=fzfhist.sh\n"
+		"i=img_viewer.sh\n"
+		"ih=ihelp.sh\n"
+		"kbgen=kbgen\n"
+		"music=music_player.sh\n"
+		"ptot=pdf_viewer.sh\n"
+		"rrm=recur_rm.sh\n"
+		"update=update.sh\n"
+		"vid=vid_viewer.sh\n"
+		"vt=virtualize.sh\n"
+		"wall=wallpaper_setter.sh\n",
 	    PROGRAM_NAME, PROGRAM_NAME);
 
 	close_fstream(fp, fd);
@@ -477,22 +526,22 @@ create_tmp_files(void)
 	if (xargs.stealth_mode == 1)
 		return;
 
-	if (!user.name)
-		return;
-
 	size_t pnl_len = strlen(PNL);
 
 	/* #### CHECK THE TMP DIR #### */
 
-	/* If the temporary directory doesn't exist, create it. I create
-	 * the parent directory (/tmp/clifm) with 1777 permissions (world
-	 * writable with the sticky bit set), so that every user is able
-	 * to create files in here, but only the file's owner can remove
-	 * or modify them */
-	size_t user_len = strlen(user.name);
+	/* If the temporary directory doesn't exist, create it. Let's create the
+	 * parent directory (/tmp/clifm) with 1777 permissions (world writable
+	 * with the sticky bit set), so that every user is able to create files
+	 * in here, but only the file's owner can remove or modify them */
+	size_t user_len = user.name ? strlen(user.name) : 7; /* 7: length of "unknown" */
 	tmp_dir = (char *)xnmalloc(P_tmpdir_len + pnl_len + user_len + 3, sizeof(char));
-	sprintf(tmp_dir, "%s/%s", P_tmpdir, PNL);
-	/* P_tmpdir is defined in stdio.h and it's value is usually /tmp */
+	if (P_tmpdir_len > 0 && P_tmpdir[P_tmpdir_len - 1] == '/')
+		sprintf(tmp_dir, "%s%s", P_tmpdir, PNL); /* On OpenBSD we get "/tmp/" */
+	else
+		sprintf(tmp_dir, "%s/%s", P_tmpdir, PNL);
+	/* P_tmpdir is defined in stdio.h and it's value is usually /tmp
+	 * If not defined, it will be defined as "/tmp" */
 
 	int tmp_root_ok = 1;
 	struct stat attr;
@@ -505,11 +554,10 @@ create_tmp_files(void)
 		xmkdir(tmp_dir, S_IRWXU | S_IRWXG | S_IRWXO | S_ISVTX);
 
 	/* Once the parent directory exists, create the user's directory to
-	 * store the list of selected files:
-	 * TMP_DIR/clifm/username/.selbox_PROFILE. I use here very
-	 * restrictive permissions (700), since only the corresponding user
-	 * must be able to read and/or modify this list */
-	sprintf(tmp_dir, "%s/%s/%s", P_tmpdir, PNL, user.name);
+	 * store the list of selected files: TMP_DIR/clifm/username/.selbox_PROFILE.
+	 * We use here very restrictive permissions (700), since only the corresponding
+	 * user must be able to read and/or modify this list */
+	sprintf(tmp_dir, "%s/%s/%s", P_tmpdir, PNL, user.name ? user.name : "unknown");
 	if (stat(tmp_dir, &attr) == -1) {
 		if (xmkdir(tmp_dir, S_IRWXU) == EXIT_FAILURE) {
 			selfile_ok = 0;
@@ -523,8 +571,7 @@ create_tmp_files(void)
 		if (!sel_file) {
 			selfile_ok = 0;
 			_err('w', PRINT_PROMPT, "%s: %s: Directory not writable. Selected "
-				"files will be lost after program exit\n",
-			    PROGRAM_NAME, tmp_dir);
+				"files will be lost after program exit\n", PROGRAM_NAME, tmp_dir);
 		}
 	}
 
@@ -533,8 +580,7 @@ create_tmp_files(void)
 	if (sel_file)
 		return;
 
-	/*"We will write a temporary selfile in /tmp. Check if this latter is
-	 * available */
+	/*"We will write a temporary selfile in /tmp. Check if this latter is available */
 	if (!tmp_root_ok) {
 		_err('w', PRINT_PROMPT, "%s: Could not create the selections file.\n"
 			"Selected files will be lost after program exit\n",
@@ -552,19 +598,195 @@ create_tmp_files(void)
 		else
 			prof_len = 7; /* Lenght of "default" */
 
-		sel_file = (char *)xnmalloc(P_tmpdir_len + prof_len + 13,
-		    sizeof(char));
-		sprintf(sel_file, "%s/selbox_%s.cfm", P_tmpdir,
+/*		sel_file = (char *)xnmalloc(P_tmpdir_len + prof_len + 13, sizeof(char));
+		sprintf(sel_file, "%s/selbox_%s.cfm", P_tmpdir, */
+		sel_file = (char *)xnmalloc(P_tmpdir_len + prof_len + 15, sizeof(char));
+		sprintf(sel_file, "%s/selbox_%s.clifm", P_tmpdir,
 		    (alt_profile) ? alt_profile : "default");
 	} else {
-		sel_file = (char *)xnmalloc(P_tmpdir_len + 12, sizeof(char));
-		sprintf(sel_file, "%s/selbox.cfm", P_tmpdir);
+/*		sel_file = (char *)xnmalloc(P_tmpdir_len + 12, sizeof(char));
+		sprintf(sel_file, "%s/selbox.cfm", P_tmpdir); */
+		sel_file = (char *)xnmalloc(P_tmpdir_len + 14, sizeof(char));
+		sprintf(sel_file, "%s/selbox.clifm", P_tmpdir);
 	}
 
-	_err('w', PRINT_PROMPT, _("%s: '%s': Using a temporary directory for "
+	_err('w', PRINT_PROMPT, _("%s: %s: Using a temporary directory for "
 		"the Selection Box. Selected files won't be persistent across "
 		"reboots\n"), PROGRAM_NAME, tmp_dir);
 }
+
+/* THIS IS TEMPORAL CODE!
+ * It is intended to rename config files from .cfm to .clifm, and should
+ * be removed once this transition has been made (2 releases?) */
+
+#if !defined(_NO_RENAME_CONFIG)
+#include <dirent.h>
+static void
+rename_cfm_files(char *dir)
+{
+	struct dirent **_files = (struct dirent **)NULL;
+	int n = scandir(dir, &_files, NULL, NULL);
+
+	if (n == -1)
+		return;
+
+	size_t i;
+	for (i = 0; i < (size_t)n; i++) {
+		if (SELFORPARENT(_files[i]->d_name)) {
+			free(_files[i]);
+			continue;
+		}
+
+		char *p = strrchr(_files[i]->d_name, '.');
+		if (!p || !*(p + 1) || strcmp(p, ".cfm") != 0) {
+			free(_files[i]);
+			continue;
+		}
+
+		*p = '\0';
+		char src[PATH_MAX], dst[PATH_MAX];
+		snprintf(src, sizeof(src), "%s/%s.cfm", dir, _files[i]->d_name);
+		snprintf(dst, sizeof(dst), "%s/%s.clifm", dir, _files[i]->d_name);
+
+//		printf("%s renamed as %s\n", src, dst);
+		if (rename(src, dst) == -1)
+			_err('e', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, src, strerror(errno));
+		free(_files[i]);
+	}
+
+	free(_files);
+}
+
+static void
+rename_profile_files(char *dir)
+{
+	char p[PATH_MAX];
+	snprintf(p, sizeof(p), "%s/profiles", dir);
+	struct stat a;
+	if (stat(p, &a) == -1)
+		return;
+
+	struct dirent **_files = (struct dirent **)NULL;
+	int n = scandir(p, &_files, NULL, NULL);
+
+	if (n == -1)
+		return;
+
+	size_t i;
+	for (i = 0; i < (size_t)n; i++) {
+		if (SELFORPARENT(_files[i]->d_name)) {
+			free(_files[i]);
+			continue;
+		}
+
+		char tmp[PATH_MAX * 2];
+		snprintf(tmp, sizeof(tmp), "%s/%s", p, _files[i]->d_name);
+
+#if !defined(_DIRENT_HAVE_D_TYPE)
+		if (stat(tmp, &a) == -1) {
+			free(_files[i]);
+			continue;
+		}
+		if (S_ISDIR(a.st_mode))
+#else
+		if (_files[i]->d_type == DT_DIR)
+#endif /* !_DIRENT_HAVE_D_TYPE */
+			rename_cfm_files(tmp);
+
+		free(_files[i]);
+	}
+
+	free(_files);
+}
+
+static void
+rename_color_files(char *dir)
+{
+	char p[PATH_MAX];
+	snprintf(p, sizeof(p), "%s/colors", dir);
+
+	struct stat a;
+	if (stat(p, &a) != -1)
+		rename_cfm_files(p);
+}
+
+static void
+rename_config_files(char *dir)
+{
+	rename_cfm_files(dir);
+	rename_color_files(dir);
+	rename_profile_files(dir);
+}
+
+#include "readline.h"
+static int
+get_user_answer(const char *_msg)
+{
+	char *answer = (char *)NULL;
+	while (!answer) {
+		answer = rl_no_hist(_msg);
+		if (!answer)
+			continue;
+
+		if (!*answer || answer[1]) {
+			free(answer);
+			answer = (char *)NULL;
+			continue;
+		}
+
+		switch(*answer) {
+		case 'y': /* fallthrough */
+		case 'Y': free(answer); return 1;
+		case 'n': /* fallthrough */
+		case 'N': free(answer); return 0;
+		default: free(answer); answer = (char *)NULL; continue;
+		}
+	}
+
+	return 0; /* Never reached */
+}
+
+static void
+check_cfm_files(void)
+{
+	/* Let's suppose that, if keybindings.cfm doesn't exist, the
+	 * transition has been already made (or this is a fresh installation) */
+	struct stat a;
+	char q[PATH_MAX + 17];
+	snprintf(q, sizeof(q), "%s/keybindings.cfm", config_dir_gral);
+	if (stat(q, &a) == -1)
+		return;
+
+	fprintf(stderr, "##################\n"
+	"# IMPORTANT NOTE #\n"
+	"##################\n\n"
+	"%s transitioned from .cfm to .clifm file extension for its "
+	"configuration files.\n"
+	"This has been done to avoid conflicts with the ColdFusion Markup Language file "
+	"extension (cfm).\n"
+	"Your config files, including color schemes, will be automatically renamed, "
+	"that's all: nothing will be lost.\n"
+	"Note that if you cancel this operation (by pressing 'n'), new .clifm config files will be "
+	"created and the\nold .cfm ones will be kept, but ignored (in which case you "
+	"should manually remove/rename them to silence this warning).\n\n"
+	"If you prefer to perform a manual transition, please follow these steps:\n"
+	"1. Press 'n' (clifm will start as usual, using the new configuration files)\n"
+	"2. cd into the appropriate directories (those containing .cfm files, i.e, clifm, "
+	"clifm/colors, and /clifm/profiles)\n"
+	"3. Bulk rename .cfm files as .clifm files: 'br *.cfm' (or, file by "
+	"file: 'm FILE.cfm FILE.clifm')\n"
+	"4. Restart clifm\n",
+	_PROGRAM_NAME);
+
+	putchar('\n');
+	if (get_user_answer("Rename configuration files automatically? [y/n] ") != 1)
+		return;
+
+	rename_config_files(config_dir_gral);
+	_err('n', PRINT_PROMPT, "%s: Configuration files changed from .cfm to .clifm "
+		"file extension\n", PROGRAM_NAME);
+}
+#endif /* !_NO_RENAME_CONFIG */
 
 static void
 define_config_file_names(void)
@@ -574,22 +796,25 @@ define_config_file_names(void)
 	if (alt_config_dir) {
 		config_dir_gral = savestring(alt_config_dir, strlen(alt_config_dir));
 		free(alt_config_dir);
+		alt_config_dir = (char *)NULL;
 	} else {
 		/* If $XDG_CONFIG_HOME is set, use it for the config file.
 		 * Else, fall back to $HOME/.config */
 		char *xdg_config_home = getenv("XDG_CONFIG_HOME");
 		if (xdg_config_home) {
 			size_t xdg_config_home_len = strlen(xdg_config_home);
-			config_dir_gral = (char *)xnmalloc(xdg_config_home_len + pnl_len
-							+ 2, sizeof(char));
+			config_dir_gral = (char *)xnmalloc(xdg_config_home_len + pnl_len + 2, sizeof(char));
 			sprintf(config_dir_gral, "%s/%s", xdg_config_home, PNL);
 			xdg_config_home = (char *)NULL;
 		} else {
-			config_dir_gral = (char *)xnmalloc(user.home_len + pnl_len + 11,
-							sizeof(char));
+			config_dir_gral = (char *)xnmalloc(user.home_len + pnl_len + 11, sizeof(char));
 			sprintf(config_dir_gral, "%s/.config/%s", user.home, PNL);
 		}
 	}
+
+#if !defined(_NO_RENAME_CONFIG)
+	check_cfm_files();
+#endif /* !_NO_RENAME_CONFIG */
 
 	size_t config_gral_len = strlen(config_dir_gral);
 
@@ -614,8 +839,10 @@ define_config_file_names(void)
 		alt_kbinds_file = (char *)NULL;
 	} else {
 		/* Keybindings per user, not per profile */
-		kbinds_file = (char *)xnmalloc(config_gral_len + 17, sizeof(char));
-		sprintf(kbinds_file, "%s/keybindings.cfm", config_dir_gral);
+/*		kbinds_file = (char *)xnmalloc(config_gral_len + 17, sizeof(char));
+		sprintf(kbinds_file, "%s/keybindings.cfm", config_dir_gral); */
+		kbinds_file = (char *)xnmalloc(config_gral_len + 19, sizeof(char));
+		sprintf(kbinds_file, "%s/keybindings.clifm", config_dir_gral);
 	}
 
 	colors_dir = (char *)xnmalloc(config_gral_len + 8, sizeof(char));
@@ -623,7 +850,7 @@ define_config_file_names(void)
 
 	plugins_dir = (char *)xnmalloc(config_gral_len + 9, sizeof(char));
 	sprintf(plugins_dir, "%s/plugins", config_dir_gral);
-
+/*
 #ifndef _NO_TRASH
 	trash_dir = (char *)xnmalloc(user.home_len + 20, sizeof(char));
 	sprintf(trash_dir, "%s/.local/share/Trash", user.home);
@@ -635,25 +862,33 @@ define_config_file_names(void)
 
 	trash_info_dir = (char *)xnmalloc(trash_len + 6, sizeof(char));
 	sprintf(trash_info_dir, "%s/info", trash_dir);
-#endif
+#endif */
 
-	dirhist_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
-	sprintf(dirhist_file, "%s/dirhist.cfm", config_dir);
+/*	dirhist_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
+	sprintf(dirhist_file, "%s/dirhist.cfm", config_dir); */
+	dirhist_file = (char *)xnmalloc(config_dir_len + 15, sizeof(char));
+	sprintf(dirhist_file, "%s/dirhist.clifm", config_dir);
 
 	if (!alt_bm_file) {
-		bm_file = (char *)xnmalloc(config_dir_len + 15, sizeof(char));
-		sprintf(bm_file, "%s/bookmarks.cfm", config_dir);
+/*		bm_file = (char *)xnmalloc(config_dir_len + 15, sizeof(char));
+		sprintf(bm_file, "%s/bookmarks.cfm", config_dir); */
+		bm_file = (char *)xnmalloc(config_dir_len + 17, sizeof(char));
+		sprintf(bm_file, "%s/bookmarks.clifm", config_dir);
 	} else {
 		bm_file = savestring(alt_bm_file, strlen(alt_bm_file));
 		free(alt_bm_file);
 		alt_bm_file = (char *)NULL;
 	}
 
-	log_file = (char *)xnmalloc(config_dir_len + 9, sizeof(char));
-	sprintf(log_file, "%s/log.cfm", config_dir);
+/*	log_file = (char *)xnmalloc(config_dir_len + 9, sizeof(char));
+	sprintf(log_file, "%s/log.cfm", config_dir); */
+	log_file = (char *)xnmalloc(config_dir_len + 11, sizeof(char));
+	sprintf(log_file, "%s/log.clifm", config_dir);
 
-	hist_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
-	sprintf(hist_file, "%s/history.cfm", config_dir);
+/*	hist_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
+	sprintf(hist_file, "%s/history.cfm", config_dir); */
+	hist_file = (char *)xnmalloc(config_dir_len + 15, sizeof(char));
+	sprintf(hist_file, "%s/history.clifm", config_dir);
 
 	if (!alt_config_file) {
 		config_file = (char *)xnmalloc(config_dir_len + pnl_len + 4, sizeof(char));
@@ -664,20 +899,25 @@ define_config_file_names(void)
 		alt_config_file = (char *)NULL;
 	}
 
-	profile_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
-	sprintf(profile_file, "%s/profile.cfm", config_dir);
+/*	profile_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
+	sprintf(profile_file, "%s/profile.cfm", config_dir); */
+	profile_file = (char *)xnmalloc(config_dir_len + 15, sizeof(char));
+	sprintf(profile_file, "%s/profile.clifm", config_dir);
 
-	msg_log_file = (char *)xnmalloc(config_dir_len + 14, sizeof(char));
-	sprintf(msg_log_file, "%s/messages.cfm", config_dir);
+/*	mime_file = (char *)xnmalloc(config_dir_len + 14, sizeof(char));
+	sprintf(mime_file, "%s/mimelist.cfm", config_dir); */
+	mime_file = (char *)xnmalloc(config_dir_len + 16, sizeof(char));
+	sprintf(mime_file, "%s/mimelist.clifm", config_dir);
 
-	mime_file = (char *)xnmalloc(config_dir_len + 14, sizeof(char));
-	sprintf(mime_file, "%s/mimelist.cfm", config_dir);
+/*	actions_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
+	sprintf(actions_file, "%s/actions.cfm", config_dir); */
+	actions_file = (char *)xnmalloc(config_dir_len + 15, sizeof(char));
+	sprintf(actions_file, "%s/actions.clifm", config_dir);
 
-	actions_file = (char *)xnmalloc(config_dir_len + 13, sizeof(char));
-	sprintf(actions_file, "%s/actions.cfm", config_dir);
-
-	remotes_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
-	sprintf(remotes_file, "%s/nets.cfm", config_dir);
+/*	remotes_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
+	sprintf(remotes_file, "%s/nets.cfm", config_dir); */
+	remotes_file = (char *)xnmalloc(config_dir_len + 12, sizeof(char));
+	sprintf(remotes_file, "%s/nets.clifm", config_dir);
 
 	return;
 }
@@ -689,13 +929,15 @@ import_rl_file(void)
 		return EXIT_FAILURE;
 
 	char tmp[PATH_MAX];
-	sprintf(tmp, "%s/readline.cfm", config_dir_gral);
+//	sprintf(tmp, "%s/readline.cfm", config_dir_gral);
+	sprintf(tmp, "%s/readline.clifm", config_dir_gral);
 	struct stat attr;
 	if (lstat(tmp, &attr) == 0)
 		return EXIT_SUCCESS;
 
 	char rl_file[PATH_MAX];
-	snprintf(rl_file, PATH_MAX - 1, "%s/%s/readline.cfm", data_dir, PNL);
+//	snprintf(rl_file, PATH_MAX - 1, "%s/%s/readline.cfm", data_dir, PNL);
+	snprintf(rl_file, PATH_MAX - 1, "%s/%s/readline.clifm", data_dir, PNL);
 	if (stat(rl_file, &attr) == EXIT_SUCCESS) {
 		char *cmd[] = {"cp", rl_file, config_dir_gral, NULL};
 		if (launch_execve(cmd, FOREGROUND, E_NOSTDERR) == EXIT_SUCCESS)
@@ -719,7 +961,8 @@ create_config(char *file)
 	FILE *config_fp = open_fstream_w(file, &fd);
 
 	if (!config_fp) {
-		fprintf(stderr, "%s: fopen: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "%s: fopen: %s: %s\n", PROGRAM_NAME,
+			file, strerror(errno));
 		return EXIT_FAILURE;
 	}
 
@@ -752,6 +995,9 @@ ListingMode=%d\n\n"
 		"# List files automatically after changing current directory\n\
 AutoLs=%s\n\n"
 
+		"# Send errors, warnings, and notices to the notification daemon?\n\
+DesktopNotifications=%s\n\n"
+
 	    "# If set to true, print a map of the current position in the directory\n\
 # history list, showing previous, current, and next entries\n\
 DirhistMap=%s\n\n"
@@ -767,31 +1013,21 @@ cpCmd=%d\n\n"
 
 	    "# Set the default move command. Available options are: 0 = mv,\n\
 # and 1 = advmv. 1 adds a progress bar to mv.\n\
-mvCmd=%d\n\n"
-
-	    "# If set to 'default', CliFM state information (selected files,\n\
-# trashed files, current workspace, messages, and stealth mode) will be printed\n\
-# to the left of the prompt. Otherwise, if set to 'custom', this information\n\
-# will be stored in environment variables to be handled by the prompt string\n\
-# itself. Consult the manpage for more information.\n\
-PromptStyle=default\n\n"
-
-		"# A prompt to warn the user about invalid command names\n\
-WarningPrompt=%s\n\n",
+mvCmd=%d\n\n",
 
 	    COLORS_REPO,
 		DEF_COLOR_SCHEME,
 		DEF_FILES_COUNTER == 1 ? "true" : "false",
 		DEF_LISTING_MODE,
 		DEF_AUTOLS == 1 ? "true" : "false",
+		DEF_DESKTOP_NOTIFICATIONS == 1 ? "true" : "false",
 		DEF_DIRHIST_MAP == 1 ? "true" : "false",
 		DEF_CP_CMD,
-		DEF_MV_CMD,
-		DEF_WARNING_PROMPT == 1 ? "true" : "false");
+		DEF_MV_CMD);
 
 	fprintf(config_fp,
-		"# TAB completion mode: either 'standard' or 'fzf'. Defaults to 'fzf' if\n\
-# the binary is found in PATH. Otherwise the 'standard' mode is used\n\
+		"# TAB completion mode: 'standard', 'fzf', 'fzy', or 'smenu'. Defaults to\n\
+# 'fzf' if the binary is found in PATH. Otherwise, the standard mode is used\n\
 TabCompletionMode=\n\n"
 
 	    "# MaxPath is only used for the /p option of the prompt: the current working\n\
@@ -803,12 +1039,24 @@ MaxPath=%d\n\n"
 # Print %s's logo screen at startup\n\
 SplashScreen=%s\n\n\
 ShowHiddenFiles=%s\n\n\
-# List files properties next to file names instead of just file names\n\
+# List file properties next to file names instead of just file names\n\
 LongViewMode=%s\n\
+# Properties fields to be printed in long view mode\n\
+# d = inode number\n\
+# p|n = permissions: either symbolic (p) or numeric/octal (n)\n\
+# i = user/group IDs (numeric)\n\
+# a|c|m = either last (a)ccess, (m)odification or status (c)hange time\n\
+# s = size\n\
+# A single dash \"-\" disables all fields\n\
+PropFields=\"%s\"\n\
+# Print files apparent size instead of actual device usage (Linux only)\n\
+ApparentSize=%s\n\
 # If running in long view, print directories full size (including contents)\n\
-FullDirSize=false\n\n\
-# Keep a record of both external commands and internal commands able to\n\
-# modify the files system (e.g. 'r', 'c', 'm', and so on)\n\
+FullDirSize=%s\n\n\
+# Log errors and warnings\n\
+Logs=%s\n\
+# Keep a record of external commands and internal commands able to\n\
+# modify the files system (e.g. 'r', 'c', 'm', and so on). Logs must be set to true\n\
 LogCmds=%s\n\n"
 
 	    "# Minimum length at which a file name can be trimmed in long view mode\n\
@@ -861,6 +1109,10 @@ SuggestFiletypeColor=%s\n\n"
 
 "SyntaxHighlighting=%s\n\n"
 
+		"# We have three search strategies: 0 = glob-only, 1 = regex-only,\n\
+# and 2 = glob-regex\n\
+SearchStrategy=%d\n\n"
+
 	    "# If set to true, expand bookmark names into the corresponding bookmark\n\
 # path: if the bookmark is \"name=/path\", \"name\" will be interpreted\n\
 # as /path. TAB completion is also available for bookmark names.\n\
@@ -881,7 +1133,11 @@ LightMode=%s\n\n",
 		DEF_SPLASH_SCREEN == 1 ? "true" : "false",
 		DEF_SHOW_HIDDEN == 1 ? "true" : "false",
 		DEF_LONG_VIEW == 1 ? "true" : "false",
+		DEF_PROP_FIELDS,
+		DEF_APPARENT_SIZE == 1 ? "true" : "false",
+		DEF_FULL_DIR_SIZE == 1 ? "true" : "false",
 		DEF_LOGS_ENABLED == 1 ? "true" : "false",
+		DEF_LOG_CMDS == 1 ? "true" : "false",
 		DEF_MIN_NAME_TRIM,
 		DEF_MIN_JUMP_RANK,
 		DEF_MAX_JUMP_TOTAL_RANK,
@@ -893,6 +1149,7 @@ LightMode=%s\n\n",
 		DEF_SUG_STRATEGY,
 		DEF_SUG_FILETYPE_COLOR == 1 ? "true" : "false",
 		DEF_HIGHLIGHT == 1 ? "true" : "false",
+		DEF_SEARCH_STRATEGY,
 		DEF_EXPAND_BOOKMARKS == 1 ? "true" : "false",
 		DEF_LIGHT_MODE == 1 ? "true" : "false"
 		);
@@ -929,9 +1186,13 @@ Sort=%d\n\
 # true (you can also use the --sort-reverse option or the 'st' command)\n\
 SortReverse=%s\n\n"
 
+		"# A comma separated list of workspace names in the form NUM=NAME\n\
+# Example: \"1=MAIN,2=EXTRA,3=GIT,4=WORK\" or \"1=α,2=β,3=γ,4=δ\"\n\
+WorkspaceNames=\"\"\n\n"
+
 	    "# Print a usage tip at startup\n\
 Tips=%s\n\n\
-ListFoldersFirst=%s\n\n\
+ListDirsFirst=%s\n\n\
 # Enable case sensitive listing for files in the current directory\n\
 CaseSensitiveList=%s\n\n\
 # Enable case sensitive lookup for the directory jumper function (via \n\
@@ -989,7 +1250,7 @@ RlEditMode=%d\n\n",
 		DEF_SORT,
 		DEF_SORT_REVERSE == 1 ? "true" : "false",
 		DEF_TIPS == 1 ? "true" : "false",
-		DEF_LIST_FOLDERS_FIRST == 1 ? "true" : "false",
+		DEF_LIST_DIRS_FIRST == 1 ? "true" : "false",
 		DEF_CASE_SENS_LIST == 1 ? "true" : "false",
 		DEF_CASE_SENS_DIRJUMP == 1 ? "true" : "false",
 		DEF_CASE_SENS_PATH_COMP == 1 ? "true" : "false",
@@ -1024,34 +1285,12 @@ RlEditMode=%d\n\n",
 # Control CliFM settings on a per directory basis. For more information\n\
 # consult the manpage\n\
 #autocmd /media/remotes/** lm=1,fc=0\n\
-#autocmd ~/important !printf \"Keep your fingers outta here!\n\" && read -n1\n\
+#autocmd ~/important !printf \"Keep your fingers outta here!\\n\" && read -n1\n\
 #autocmd ~/Downloads !/usr/share/clifm/plugins/fzfnav.sh\n\n",
 	    config_fp);
 
 	close_fstream(config_fp, fd);
 	return EXIT_SUCCESS;
-}
-
-/* Import the default color scheme from DATADIR (usually /usr/share)
- * Return zero on success or one on failure */
-static int
-import_color_scheme(void)
-{
-	if (!data_dir || !*data_dir)
-		return EXIT_FAILURE;
-
-	char dfile[PATH_MAX];
-	snprintf(dfile, PATH_MAX - 1, "%s/%s/colors/default.cfm", data_dir, PNL);
-
-	struct stat attr;
-	if (stat(dfile, &attr) == -1)
-		return EXIT_FAILURE;
-
-	char *cmd[] = {"cp", dfile, colors_dir, NULL};
-	if (launch_execve(cmd, FOREGROUND, E_NOFLAG) == EXIT_SUCCESS)
-		return EXIT_SUCCESS;
-
-	return EXIT_FAILURE;
 }
 
 static void
@@ -1060,8 +1299,10 @@ create_def_cscheme(void)
 	if (!colors_dir || !*colors_dir)
 		return;
 
-	char *cscheme_file = (char *)xnmalloc(strlen(colors_dir) + 13, sizeof(char));
-	sprintf(cscheme_file, "%s/default.cfm", colors_dir);
+/*	char *cscheme_file = (char *)xnmalloc(strlen(colors_dir) + 13, sizeof(char));
+	sprintf(cscheme_file, "%s/default.cfm", colors_dir); */
+	char *cscheme_file = (char *)xnmalloc(strlen(colors_dir) + 15, sizeof(char));
+	sprintf(cscheme_file, "%s/default.clifm", colors_dir);
 
 	/* If the file already exists, do nothing */
 	struct stat attr;
@@ -1071,11 +1312,12 @@ create_def_cscheme(void)
 	}
 
 	/* Try to import it from data dir */
-	if (import_color_scheme() == EXIT_SUCCESS) {
+	if (import_color_scheme("default") == EXIT_SUCCESS) {
 		free(cscheme_file);
 		return;
 	}
 
+	/* If cannot be imported either, create it with default values */
 	int fd;
 	FILE *fp = open_fstream_w(cscheme_file, &fd);
 	if (!fp) {
@@ -1092,29 +1334,39 @@ create_def_cscheme(void)
 # LS_COLORS environment variable. Thus, \"di=01;34\" means that (non-empty)\n\
 # directories will be listed in bold blue.\n\
 # Color codes are traditional ANSI escape sequences less the escape char and\n\
-# the final 'm'. 8 bit, 256 colors, and RGB colors are supported.\n\
+# the final 'm'. 8 bit, 256 colors, RGB, and hex (#rrggbb) colors are supported.\n\
 # A detailed explanation of all these codes can be found in the manpage.\n\n"
 
-		    "FiletypeColors=\"%s\"\n\n"
+			"FiletypeColors=\"%s\"\n\n"
 
-		    "InterfaceColors=\"%s\"\n\n"
+			"InterfaceColors=\"%s\"\n\n"
 
-		    "# Same as FiletypeColors, but for file extensions. The format is always\n\
+			"# Same as FiletypeColors, but for file extensions. The format is always\n\
 # *.EXT=COLOR\n"
 
-		    "ExtColors=\"%s\"\n\n"
-		    "DirIconColor=\"00;33\"\n\n"
+			"ExtColors=\"%s\"\n\n"
+			"DirIconColor=\"00;33\"\n\n"
 			"DividingLine=\"%s\"\n\n"
-		    "Prompt=\"%s\"\n\n"
-		    "WarningPromptStr=\"%s\"\n\n"
-		    "FzfTabOption=\"%s\"\n\n",
+
+			"If set to 'true', automatically print notifications at the left\n\
+of the prompt. If set to 'false', let the prompt string handle these notifications\n\
+itself via escape codes. See the manpage for more information\n"
+			"Notifications=\"%s\"\n\n"
+			"Prompt=\"%s\"\n\n"
+
+			"An alternative prompt to warn the user about invalid command names\n"
+			"EnableWarningPrompt=\"%s\"\n\n"
+			"WarningPrompt=\"%s\"\n\n"
+			"FzfTabOptions=\"%s\"\n\n",
 
 		PROGRAM_NAME,
 		DEF_FILE_COLORS,
 		DEF_IFACE_COLORS,
 		DEF_EXT_COLORS,
 		DEF_DIV_LINE,
+		DEF_PROMPT_NOTIF == 1 ? "true" : "false",
 		DEFAULT_PROMPT,
+		DEF_WARNING_PROMPT == 1 ? "true" : "false",
 		DEF_WPROMPT_STR,
 		DEF_FZFTAB_OPTIONS);
 
@@ -1137,7 +1389,8 @@ create_remotes_file(void)
 
 	/* Let's try to copy the file from DATADIR */
 	char sys_remotes[PATH_MAX];
-	snprintf(sys_remotes, PATH_MAX - 1, "%s/%s/nets.cfm", data_dir, PNL);
+//	snprintf(sys_remotes, PATH_MAX - 1, "%s/%s/nets.cfm", data_dir, PNL);
+	snprintf(sys_remotes, PATH_MAX - 1, "%s/%s/nets.clifm", data_dir, PNL);
 
 	if (stat(sys_remotes, &attr) == EXIT_SUCCESS) {
 		char *cmd[] = {"cp", "-f", sys_remotes, remotes_file, NULL};
@@ -1181,39 +1434,6 @@ create_config_files(void)
 {
 	struct stat attr;
 
-			/* #############################
-			 * #        TRASH DIRS         #
-			 * ############################# */
-#ifndef _NO_TRASH
-	if (stat(trash_dir, &attr) == -1) {
-		char *trash_files = (char *)NULL;
-		trash_files = (char *)xnmalloc(strlen(trash_dir) + 7, sizeof(char));
-
-		sprintf(trash_files, "%s/files", trash_dir);
-		char *trash_info = (char *)NULL;
-		trash_info = (char *)xnmalloc(strlen(trash_dir) + 6, sizeof(char));
-
-		sprintf(trash_info, "%s/info", trash_dir);
-		char *cmd[] = {"mkdir", "-p", trash_files, trash_info, NULL};
-
-		int ret = launch_execve(cmd, FOREGROUND, E_NOFLAG);
-		free(trash_files);
-		free(trash_info);
-
-		if (ret != EXIT_SUCCESS) {
-			trash_ok = 0;
-			_err('w', PRINT_PROMPT, _("%s: mkdir: '%s': Error creating trash "
-				"directory. Trash function disabled\n"), PROGRAM_NAME, trash_dir);
-		}
-	}
-
-	/* If it exists, check it is writable */
-	else if (access(trash_dir, W_OK) == -1) {
-		trash_ok = 0;
-		_err('w', PRINT_PROMPT, _("%s: '%s': Directory not writable. "
-				"Trash function disabled\n"), PROGRAM_NAME, trash_dir);
-	}
-#endif
 				/* ####################
 				 * #    CONFIG DIR    #
 				 * #################### */
@@ -1258,7 +1478,7 @@ create_config_files(void)
 	if (stat(config_file, &attr) == -1)
 		config_ok = create_config(config_file) == EXIT_SUCCESS ? 1 : 0;
 
-	if (!config_ok)
+	if (config_ok == 0)
 		return;
 
 				/* ######################
@@ -1271,10 +1491,13 @@ create_config_files(void)
 			_err('e', PRINT_PROMPT, "%s: fopen: '%s': %s\n", PROGRAM_NAME,
 			    profile_file, strerror(errno));
 		} else {
-			fprintf(profile_fp, _("# %s profile\n"
+			fprintf(profile_fp, _("# This is %s's profile file\n#\n"
 				"# Write here the commands you want to be executed at startup\n"
-				"# Ex:\n#echo -e \"%s, the command line file manager\"\n"),
-				PROGRAM_NAME, PROGRAM_NAME);
+				"# Ex:\n#echo \"%s, the command line file manager\"; read -r\n#\n"
+				"# Uncommented, non-empty lines are executed line by line. If you\n"
+				"# want a multi-line command, just write a script for it:\n"
+				"#sh /path/to/my/script.sh\n"),
+				_PROGRAM_NAME, _PROGRAM_NAME);
 			fclose(profile_fp);
 		}
 	}
@@ -1306,39 +1529,181 @@ create_config_files(void)
 	create_remotes_file();
 }
 
+static int
+create_mime_file_anew(char *file)
+{
+	int fd;
+	FILE *fp = open_fstream_w(file, &fd);
+	if (!fp) {
+		_err('e', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME, file, strerror(errno));
+		return EXIT_FAILURE;
+	}
+
+	fprintf(fp, "                  ###################################\n\
+                  #   Configuration file for Lira   #\n\
+                  #     CliFM's resource opener     #\n\
+                  ###################################\n\
+\n\
+# Commented and blank lines are omitted\n\
+\n\
+# The below settings cover the most common filetypes\n\
+# It is recommended to edit this file placing your prefered applications\n\
+# at the beginning of the apps list to speed up the opening process\n\
+\n\
+# The file is read top to bottom and left to right; the first existent\n\
+# application found will be used\n\
+\n\
+# Applications defined here are NOT desktop files, but commands (arguments\n\
+# could be used as well). Write you own handmade scripts to open specific\n\
+# files if necessary. Ex: X:^text/.*:~/scripts/my_cool_script.sh\n\
+\n\
+# Use 'X' to specify a GUI environment and '!X' for non-GUI environments,\n\
+# like the kernel built-in console or a remote SSH session.\n\
+\n\
+# Use 'N' to match file names instead of MIME types.\n\
+\n\
+# Regular expressions are allowed for both file types and file names.\n\
+\n\
+# Use the %%f placeholder to specify the position of the file name to be\n\
+# opened in the command. Example:\n\
+# 'mpv %%f --terminal=no' -> 'mpv FILE --terminal=no'\n\
+# If %%f is not specified, the file name will be added to the end of the\n\
+# command. Ex: 'mpv --terminal=no' -> 'mpv --terminal=no FILE'\n\
+\n\
+# Running the opening application in the background:\n\
+# For GUI applications:\n\
+#    APP %%f &\n\
+# For terminal applications:\n\
+#    TERM -e APP %%f &\n\
+# Replace 'TERM' and 'APP' by the corresponding values. The -e option\n\
+# might vary depending on the terminal emulator used (TERM)\n\
+\n\
+# Note on graphical applications: If the opening application is already running\n\
+# the file might be opened in a tab, and CliFM won't wait for the file to be\n\
+# closed (because the process already returned). To avoid this, instruct the\n\
+# application to run a new instance: Ex: geany -i, gedit -s, kate -n,\n\
+# pluma --new-window, and so on.\n\
+\n\
+# To silence STDERR and/or STDOUT use !E and !O respectivelly (they could\n\
+# be used together). Examples:\n\
+# Silence STDERR only and run in the foreground:\n\
+#    mpv %%f !E\n\
+# Silence both (STDERR and STDOUT) and run in the background:\n\
+#    mpv %%f !EO &\n\
+# or\n\
+#    mpv %%f !E !O &\n\
+\n\
+# Environment variables could be used as well. Example:\n\
+# X:text/plain=$EDITOR %%f &;$VISUAL;nano;vi\n\
+\n\
+###########################\n\
+#  File names/extensions  #\n\
+###########################\n\
+\n\
+# Match a full file name\n\
+#X:N:some_filename=cmd\n\
+\n\
+# Match all file names starting with 'str'\n\
+#X:N:^str.*=cmd\n\
+\n\
+# Match files with extension 'ext'\n\
+#X:N:.*\\.ext$=cmd\n\
+\n\
+X:N:.*\\.djvu$=djview;zathura;evince;atril\n\
+X:N:.*\\.epub$=mupdf;zathura;ebook-viewer\n\
+X:N:.*\\.mobi$=ebook-viewer\n\
+X:N:.*\\.(cbr|cbz)$=zathura\n\
+X:N:(.*\\.clifm$|clifmrc)=$EDITOR;$VISUAL;kak;micro;nvim;vim;vi;mg;emacs;ed;nano;mili;leafpad;mousepad;featherpad;gedit;kate;pluma\n\
+!X:N:(.*\\.clifm$|clifmrc)=$EDITOR;$VISUAL;kak;micro;nvim;vim;vi;mg;emacs;ed;nano\n\
+\n\n");
+
+	fprintf(fp, "##################\n\
+#   MIME types   #\n\
+##################\n\
+\n\
+# Directories - only for the open-with (ow) command and the --open command\n\
+# line switch\n\
+# In graphical environments directories will be opened in a new window\n\
+X:inode/directory=xterm -e clifm %%f &;xterm -e vifm %%f &;pcmanfm %%f &;thunar %%f &;xterm -e ncdu %%f &\n\
+!X:inode/directory=vifm;ranger;nnn;ncdu\n\
+\n\
+# Web content\n\
+X:^text/html$=$BROWSER;surf;vimprobable;vimprobable2;qutebrowser;dwb;jumanji;luakit;uzbl;uzbl-tabbed;uzbl-browser;uzbl-core;iceweasel;midori;opera;firefox;seamonkey;brave;chromium-browser;chromium;google-chrome;epiphany;konqueror;elinks;links2;links;lynx;w3m\n\
+!X:^text/html$=$BROWSER;elinks;links2;links;lynx;w3m\n\
+\n\
+# Text\n\
+#X:^text/x-(c|shellscript|perl|script.python|makefile|fortran|java-source|javascript|pascal)$=geany\n\
+X:(^text/.*|application/json|inode/x-empty)=$EDITOR;$VISUAL;kak;micro;dte;nvim;vim;vi;mg;emacs;ed;nano;mili;leafpad;mousepad;featherpad;nedit;kate;gedit;pluma;io.elementary.code;liri-text;xed;atom;nota;gobby;kwrite;xedit\n\
+!X:(^text/.*|application/json|inode/x-empty)=$EDITOR;$VISUAL;kak;micro;dte;nvim;vim;vi;mg;emacs;ed;nano\n\
+\n\
+# Office documents\n\
+X:^application/.*(open|office)document.*=libreoffice;soffice;ooffice\n\
+\n\
+# Archives\n\
+# Note: 'ad' is CliFM's built-in archives utility (based on atool). Remove it if you\n\
+# prefer another application\n\
+X:^application/(zip|gzip|zstd|x-7z-compressed|x-xz|x-bzip*|x-tar|x-iso9660-image)=ad;xarchiver %%f &;lxqt-archiver %%f &;ark %%f &\n\
+!X:^application/(zip|gzip|zstd|x-7z-compressed|x-xz|x-bzip*|x-tar|x-iso9660-image)=ad\n\
+\n\
+# PDF\n\
+X:.*/pdf$=mupdf;sioyek;llpp;lpdf;zathura;mupdf-x11;apvlv;xpdf;evince;atril;okular;epdfview;qpdfview\n\
+\n\
+# Images\n\
+X:^image/gif$=animate;pqiv;sxiv -a;nsxiv -a\n\
+X:^image/.*=fim;display;sxiv;nsxiv;pqiv;gpicview;qview;qimgv;inkscape;mirage;ristretto;eog;eom;xviewer;viewnior;nomacs;geeqie;gwenview;gthumb;gimp\n\
+!X:^image/*=fim;img2txt;cacaview;fbi;fbv\n\
+\n\
+# Video and audio\n\
+X:^video/.*=ffplay;mplayer;mplayer2;mpv;vlc;gmplayer;smplayer;celluloid;qmplayer2;haruna;totem\n\
+X:^audio/.*=ffplay -nodisp -autoexit;mplayer;mplayer2;mpv;vlc;gmplayer;smplayer;totem\n\
+\n\
+# Fonts\n\
+X:^font/.*=fontforge;fontpreview\n\
+\n\
+# Torrent:\n\
+X:application/x-bittorrent=rtorrent;transimission-gtk;transmission-qt;deluge-gtk;ktorrent\n\
+\n\
+# Fallback to another resource opener as last resource\n\
+.*=xdg-open;mimeo;mimeopen -n;whippet -m;open;linopen;\n");
+	close_fstream(fp, fd);
+
+	return EXIT_SUCCESS;
+}
+
+static void
+print_mime_file_msg(char *file)
+{
+	int _free = 0;
+	char *f = home_tilde(file, &_free);
+
+	_err('n', PRINT_PROMPT, _("%sNOTE%s: %s created a new MIME list file (%s). "
+		"It is recommended to edit this file (entering 'mm edit' or "
+		"pressing F6) to add the programs you use and remove those "
+		"you don't. This will make the process of opening files "
+		"faster and smoother\n"), BOLD, NC, PROGRAM_NAME, f ? f : file);
+
+	if (f != file)
+		free(f);
+}
+
 int
 create_mime_file(char *file, int new_prof)
 {
+	if (!file || !*file)
+		return EXIT_FAILURE;
+
 	struct stat attr;
 	if (stat(file, &attr) == EXIT_SUCCESS)
 		return EXIT_SUCCESS;
 
-	if (!data_dir)
-		return EXIT_FAILURE;
+//	int ret = import_from_data_dir("mimelist.cfm", file);
+	int ret = import_from_data_dir("mimelist.clifm", file);
+	if (ret != EXIT_SUCCESS)
+		ret = create_mime_file_anew(file);
 
-	char sys_mimelist[PATH_MAX];
-	snprintf(sys_mimelist, PATH_MAX - 1, "%s/%s/mimelist.cfm", data_dir, PNL);
-
-	if (stat(sys_mimelist, &attr) == -1) {
-		_err('e', PRINT_PROMPT, "%s: %s: %s\n", PROGRAM_NAME,
-			sys_mimelist, strerror(errno));
-		return EXIT_FAILURE;
-	}
-
-	char *cmd[] = {"cp", "-f", sys_mimelist, file, NULL};
-	if (launch_execve(cmd, FOREGROUND, E_NOFLAG) == EXIT_SUCCESS) {
-		if (!new_prof) {
-			_err('n', PRINT_PROMPT, _("%s created a new MIME list file (%s) "
-				"It is recommended to edit this file (entering 'mm edit' or "
-				"pressing F6) to add the programs you use and remove those "
-				"you don't. This will make the process of opening files "
-				"faster and smoother\n"),
-				PROGRAM_NAME, file, sys_mimelist);
-		}
-		return EXIT_SUCCESS;
-	}
-
-	return EXIT_FAILURE;
+	if (new_prof == 0 && ret == EXIT_SUCCESS)
+		print_mime_file_msg(file);
+	return ret;
 }
 
 int
@@ -1486,6 +1851,20 @@ END:
 	listing_mode = DEF_LISTING_MODE;
 }
 
+static void
+set_search_strategy(char *line)
+{
+	char *p = strchr(line, '=');
+	if (!p || !*p || !*(++p))
+		return;
+	switch(*p) {
+	case '0': search_strategy = GLOB_ONLY; break;
+	case '1': search_strategy = REGEX_ONLY; break;
+	case '2': search_strategy = GLOB_REGEX; break;
+	default: break;
+	}
+}
+
 static inline int
 set_max_filename_len(const char *line)
 {
@@ -1502,6 +1881,67 @@ set_max_filename_len(const char *line)
 }
 
 static void
+free_workspaces_names(void)
+{
+	if (workspaces) {
+		int i = MAX_WS;
+		while (--i >= 0) {
+			free(workspaces[i].name);
+			workspaces[i].name = (char *)NULL;
+		}
+	}
+
+	return;
+}
+
+/* Get workspaces names from the WorkspacesNames line in the configuration
+ * file and store them in the workspaces array */
+void
+set_workspaces_names(char *line)
+{
+	if (!line || !*line)
+		return;
+
+	char *e = strchr(line, '=');
+	if (!e || !*(++e))
+		return;
+
+	char *t = remove_quotes(e);
+	if (!t || !*t)
+		return;
+
+	char *p = (char *)NULL;
+	while (*t) {
+		p = strchr(t, ',');
+		if (p)
+			*p = '\0';
+		else
+			p = t;
+
+		e = strchr(t, '=');
+		if (!e || !*(e + 1))
+			goto CONT;
+
+		*e = '\0';
+		if (!is_number(t))
+			goto CONT;
+
+		int a = atoi(t);
+		if (a <= 0 || a > MAX_WS)
+			goto CONT;
+
+		free(workspaces[a - 1].name);
+		workspaces[a - 1].name = savestring(e + 1, strlen(e + 1));
+
+CONT:
+		t = p + 1;
+		continue;
+	}
+
+	return;
+}
+
+static void
 read_config(void)
 {
 	int fd;
@@ -1512,6 +1952,8 @@ read_config(void)
 		return;
 	}
 
+	free_workspaces_names();
+
 	if (xargs.rl_vi_mode == 1)
 		rl_vi_editing_mode(1, 0);
 
@@ -1520,9 +1962,17 @@ read_config(void)
 	*div_line = *DEF_DIV_LINE;
 	char line[PATH_MAX + 15];
 
+	*prop_fields_str = '\0';
+
 	while (fgets(line, (int)sizeof(line), config_fp)) {
 		if (*line == '\n' || *line == '#')
 			continue;
+
+		else if (xargs.apparent_size == UNSET && *line == 'A'
+		&& strncmp(line, "ApparentSize=", 13) == 0) {
+			if (set_config_bool_value(line, &apparent_size) == -1)
+				continue;
+		}
 
 		else if (*line == 'a' && strncmp(line, "autocmd ", 8) == 0)
 			parse_autocmd_line(line + 8);
@@ -1530,6 +1980,12 @@ read_config(void)
 		else if (xargs.autocd == UNSET && *line == 'A'
 		&& strncmp(line, "Autocd=", 7) == 0) {
 			if (set_config_bool_value(line, &autocd) == -1)
+				continue;
+		}
+
+		else if (xargs.autols == UNSET && *line == 'A'
+		&& strncmp(line, "AutoLs=", 7) == 0) {
+			if (set_config_bool_value(line, &autols) == -1)
 				continue;
 		}
 
@@ -1571,12 +2027,6 @@ read_config(void)
 				continue;
 		}
 
-		else if (xargs.autols == UNSET && *line == 'A'
-		&& strncmp(line, "AutoLs=", 7) == 0) {
-			if (set_config_bool_value(line, &autols) == -1)
-				continue;
-		}
-
 		else if (xargs.cd_on_quit == UNSET && *line == 'C'
 		&& strncmp(line, "CdOnQuit=", 9) == 0) {
 			if (set_config_bool_value(line, &cd_on_quit) == -1)
@@ -1610,6 +2060,12 @@ read_config(void)
 				cp_cmd = opt_num;
 			else
 				cp_cmd = DEF_CP_CMD;
+		}
+
+		else if (xargs.desktop_notifications == UNSET && *line == 'D'
+		&& strncmp(line, "DesktopNotifications=", 21) == 0) {
+			if (set_config_bool_value(line, &desktop_notifications) == -1)
+				continue;
 		}
 
 		else if (xargs.dirmap == UNSET && *line == 'D'
@@ -1673,9 +2129,9 @@ read_config(void)
 				continue;
 		}
 
-		else if (xargs.ffirst == UNSET && *line == 'L'
-		&& strncmp(line, "ListFoldersFirst=", 17) == 0) {
-			if (set_config_bool_value(line, &list_folders_first) == -1)
+		else if (xargs.dirs_first == UNSET && *line == 'L'
+		&& strncmp(line, "ListDirsFirst=", 17) == 0) {
+			if (set_config_bool_value(line, &list_dirs_first) == -1)
 				continue;
 		}
 
@@ -1697,8 +2153,13 @@ read_config(void)
 		}
 
 		else if (xargs.logs == UNSET && *line == 'L'
-		&& strncmp(line, "LogCmds=", 8) == 0) {
+		&& strncmp(line, "Logs=", 5) == 0) {
 			if (set_config_bool_value(line, &logs_enabled) == -1)
+				continue;
+		}
+
+		else if (*line == 'L' && strncmp(line, "LogCmds=", 8) == 0) {
+			if (set_config_bool_value(line, &log_cmds) == -1)
 				continue;
 		}
 
@@ -1717,11 +2178,6 @@ read_config(void)
 		else if (*line == 'M' && strncmp(line, "MaxFilenameLen=", 15) == 0) {
 			if (set_max_filename_len(line) == -1)
 				continue;
-/*			int opt_num = 0;
-			sscanf(line, "MaxFilenameLen=%d\n", &opt_num);
-			if (opt_num <= 0)
-				continue;
-			max_name_len = opt_num; */
 		}
 
 		else if (*line == 'M' && strncmp(line, "MaxHistory=", 11) == 0) {
@@ -1836,6 +2292,14 @@ read_config(void)
 				prompt_notif = DEF_PROMPT_NOTIF;
 		}
 
+		else if (*line == 'P' && strncmp(line, "PropFields=", 11) == 0) {
+			char *tmp = get_line_value(line);
+			if (!tmp)
+				continue;
+			xstrsncpy(prop_fields_str, tmp, PROP_FIELDS_SIZE);
+			set_prop_fields(prop_fields_str);
+		}
+
 		else if (xargs.restore_last_path == UNSET && *line == 'R'
 		&& strncmp(line, "RestoreLastPath=", 16) == 0) {
 			if (set_config_bool_value(line, &restore_last_path) == -1)
@@ -1844,6 +2308,10 @@ read_config(void)
 
 		else if (*line == 'R' && strncmp(line, "RlEditMode=0", 12) == 0) {
 			rl_vi_editing_mode(1, 0); /* Readline defaults to emacs */
+		}
+
+		else if (*line == 'S' && strncmp(line, "SearchStrategy=", 15) == 0) {
+			set_search_strategy(line);
 		}
 
 		else if (xargs.share_selbox == UNSET && *line == 'S'
@@ -1897,7 +2365,7 @@ read_config(void)
 				free(workspaces[cur_ws].path);
 				workspaces[cur_ws].path = savestring(tmp, strlen(tmp));
 			} else {
-				_err('w', PRINT_PROMPT, _("%s: '%s': %s. Using the "
+				_err('w', PRINT_PROMPT, _("%s: chdir: %s: %s. Using the "
 					"current working directory as starting path\n"),
 					PROGRAM_NAME, tmp, strerror(errno));
 			}
@@ -1934,17 +2402,20 @@ read_config(void)
 #endif /* !_NO_SUGGESTIONS */
 
 #ifndef _NO_FZF
-		else if (xargs.fzftab == UNSET && xargs.fzytab == UNSET && *line == 'T'
-		&& strncmp(line, "TabCompletionMode=", 18) == 0) {
+		else if (xargs.fzftab == UNSET && xargs.fzytab == UNSET && xargs.smenutab == UNSET
+		&& *line == 'T' && strncmp(line, "TabCompletionMode=", 18) == 0) {
 			char opt_str[9] = "";
 			ret = sscanf(line, "TabCompletionMode=%8s\n", opt_str);
 			if (ret == -1)
 				continue;
-			if (strncmp(opt_str, "standard", 8) == 0)
-				fzftab = 0;
-			else {
-				if (strncmp(opt_str, "fzf", 3) == 0)
-					fzftab = 1;
+			if (strncmp(opt_str, "standard", 8) == 0) {
+				fzftab = 0; tabmode = STD_TAB;
+			} else if (strncmp(opt_str, "fzf", 3) == 0) {
+				fzftab = 1; tabmode = FZF_TAB;
+			} else if (strncmp(opt_str, "fzy", 3) == 0) {
+				fzftab = 1; tabmode = FZY_TAB;
+			} else if (strncmp(opt_str, "smenu", 5) == 0) {
+				fzftab = 1; tabmode = SMENU_TAB;
 			}
 		}
 #endif /* !_NO_FZF */
@@ -2011,12 +2482,15 @@ read_config(void)
 			wprompt_str = savestring(tmp, strlen(tmp));
 		}
 
-		else {
-			if (xargs.welcome_message == UNSET && *line == 'W'
+		else if (xargs.welcome_message == UNSET && *line == 'W'
 			&& strncmp(line, "WelcomeMessage=", 15) == 0) {
 			if (set_config_bool_value(line, &welcome_message) == -1)
 				continue;
-			}
+		}
+
+		else {
+			if (*line == 'W' && strncmp(line, "WorkspaceNames=", 15) == 0)
+				set_workspaces_names(line);
 		}
 	}
 
@@ -2025,7 +2499,7 @@ read_config(void)
 	if (xargs.disk_usage_analyzer == 1) {
 		sort = STSIZE;
 		long_view = full_dir_size = 1;
-		list_folders_first = welcome_message = 0;
+		list_dirs_first = welcome_message = 0;
 	}
 
 	if (_filter) {
@@ -2088,24 +2562,91 @@ get_fzf_win_height()
 }
 #endif /* !_NO_FZF */
 
+#ifndef _NO_TRASH
+static void
+create_trash_dirs(void)
+{
+	struct stat attr;
+	if (stat(trash_dir, &attr) == -1) {
+		if (xargs.stealth_mode == 1) {
+			_err('w', PRINT_PROMPT, _("%s: %s: %s. Trash function disabled. "
+				"If needed, create the directory manually and restart %s.\n"),
+				PROGRAM_NAME, trash_dir, strerror(errno), PROGRAM_NAME);
+			trash_ok = 0;
+			return;
+		}
+
+		char *trash_files = (char *)NULL;
+		trash_files = (char *)xnmalloc(strlen(trash_dir) + 7, sizeof(char));
+
+		sprintf(trash_files, "%s/files", trash_dir);
+		char *trash_info = (char *)NULL;
+		trash_info = (char *)xnmalloc(strlen(trash_dir) + 6, sizeof(char));
+
+		sprintf(trash_info, "%s/info", trash_dir);
+		char *cmd[] = {"mkdir", "-p", trash_files, trash_info, NULL};
+
+		int ret = launch_execve(cmd, FOREGROUND, E_NOFLAG);
+		free(trash_files);
+		free(trash_info);
+
+		if (ret != EXIT_SUCCESS) {
+			trash_ok = 0;
+			_err('w', PRINT_PROMPT, _("%s: mkdir: %s: Error creating trash "
+				"directory. Trash function disabled\n"), PROGRAM_NAME, trash_dir);
+		}
+	}
+
+	/* If it exists, check it is writable */
+	else if (access(trash_dir, W_OK) == -1) {
+		trash_ok = 0;
+		_err('w', PRINT_PROMPT, _("%s: %s: Directory not writable. "
+				"Trash function disabled\n"), PROGRAM_NAME, trash_dir);
+	}
+}
+
+static void
+set_trash_dirs(void)
+{
+	if (!user.home) {
+		trash_ok = 0;
+		return;
+	}
+
+	trash_dir = (char *)xnmalloc(user.home_len + 20, sizeof(char));
+	sprintf(trash_dir, "%s/.local/share/Trash", user.home);
+
+	size_t trash_len = strlen(trash_dir);
+
+	trash_files_dir = (char *)xnmalloc(trash_len + 7, sizeof(char));
+	sprintf(trash_files_dir, "%s/files", trash_dir);
+
+	trash_info_dir = (char *)xnmalloc(trash_len + 6, sizeof(char));
+	sprintf(trash_info_dir, "%s/info", trash_dir);
+
+	create_trash_dirs();
+}
+#endif /* _NO_TRASH */
+
 /* Set up CliFM directories and config files. Load the user's
  * configuration from clifmrc */
 void
 init_config(void)
 {
+#ifndef _NO_TRASH
+	set_trash_dirs();
+#endif /* _NO_TRASH */
 	if (xargs.stealth_mode == 1) {
-		_err(0, PRINT_PROMPT, _("%s: Running in stealth mode: trash, "
-			"persistent selection and directory history, just as bookmarks, "
-			"logs and configuration files, are disabled.\n"), PROGRAM_NAME);
+		_err(ERR_NO_LOG, PRINT_PROMPT, _("%s: Running in stealth mode: "
+			"persistent selection, bookmarks, jump database and directory history, "
+			"just as plugins, logs and configuration files, are disabled.\n"), PROGRAM_NAME);
 		config_ok = 0;
 		check_colors();
 		return;
 	}
 
-	msgs.error = msgs.notice = msgs.warning = 0;
-
-	if (!home_ok) {
-		set_default_colors();
+	if (home_ok == 0) {
+		check_colors();
 		return;
 	}
 
@@ -2114,10 +2655,10 @@ init_config(void)
 #ifndef CLIFM_SUCKLESS
 	cschemes_n = get_colorschemes();
 
-	if (config_ok)
+	if (config_ok == 1)
 		read_config();
 #else
-	strncpy(div_line, DEF_DIV_LINE, sizeof(div_line));
+	xstrsncpy(div_line, DEF_DIV_LINE, sizeof(div_line));
 #endif /* CLIFM_SUCKLESS */
 
 	check_colors();
@@ -2129,7 +2670,8 @@ init_config(void)
 		fzf_height_set = get_fzf_win_height();
 #endif
 
-	if (strncmp(getenv("TERM"), "xterm", 5) == 0)
+	char *t = getenv("TERM");
+	if (xargs.list_and_quit != 1 && t && *t == 'x' && strncmp(t, "xterm", 5) == 0)
 		/* If running Xterm, instruct it to send an escape code (27) for
 		 * Meta (Alt) key sequences. Otherwise, Alt keybindings won't work */
 		fputs(META_SENDS_ESC, stdout); /* metaSendsEscape = true */
@@ -2158,8 +2700,7 @@ reset_variables(void)
 
 	free(config_file);
 	free(profile_file);
-	free(msg_log_file);
-	config_file = profile_file = msg_log_file = (char *)NULL;
+	config_file = profile_file = (char *)NULL;
 
 	free(mime_file);
 	free(plugins_dir);
@@ -2184,12 +2725,8 @@ reset_variables(void)
 	free(wprompt_str);
 	fzftab_options = tags_dir = wprompt_str = (char *)NULL;
 
-#ifdef AUTOCMDS_TEST
 	free_autocmds();
-#endif
-
 	free_tags();
-
 	free_remotes(0);
 
 	if (_filter) {
@@ -2218,6 +2755,7 @@ reset_variables(void)
 	user.shell = (char *)NULL;
 
 	/* Reset all variables */
+	apparent_size = UNSET;
 	auto_open = UNSET;
 	autocd = UNSET;
 	autojump = UNSET;
@@ -2233,11 +2771,13 @@ reset_variables(void)
 	clear_screen = UNSET;
 	colorize = UNSET;
 	columned = UNSET;
+	cp_cmd = UNSET;
 	dirhist_map = UNSET;
 	disk_usage = UNSET;
 	ext_cmd_ok = UNSET;
 	files_counter = UNSET;
 	follow_symlinks = UNSET;
+	full_dir_size = UNSET;
 #ifndef _NO_FZF
 	fzftab = UNSET;
 #endif
@@ -2250,20 +2790,31 @@ reset_variables(void)
 #endif
 	int_vars = UNSET;
 	light_mode = UNSET;
-	list_folders_first = UNSET;
+	list_dirs_first = UNSET;
 	listing_mode = UNSET;
+	log_cmds = UNSET;
 	logs_enabled = UNSET;
 	long_view = UNSET;
+
+	max_dirhist = UNSET;
+	max_files = UNSET;
+	max_hist = UNSET;
+	max_name_len = DEF_MAX_NAME_LEN;
 	max_jump_total_rank = UNSET;
+	max_log = UNSET;
+	max_path = UNSET;
 	max_printselfiles = UNSET;
-	min_name_trim = UNSET;
-	min_jump_rank = UNSET;
+
+	mv_cmd = UNSET;
 	no_eln = UNSET;
+	only_dirs = UNSET;
 	pager = UNSET;
+	print_removed_files = UNSET;
 	print_selfiles = UNSET;
 	prompt_offset = UNSET;
 	prompt_notif = UNSET;
 	restore_last_path = UNSET;
+	search_strategy = UNSET;
 	share_selbox = UNSET;
 	show_hidden = UNSET;
 	sort = UNSET;
@@ -2363,8 +2914,8 @@ check_cmd_line_options(void)
 	if (xargs.ext != UNSET)
 		ext_cmd_ok = xargs.ext;
 
-	if (xargs.ffirst != UNSET)
-		list_folders_first = xargs.ffirst;
+	if (xargs.dirs_first != UNSET)
+		list_dirs_first = xargs.dirs_first;
 
 	if (xargs.files_counter != UNSET)
 		files_counter = xargs.files_counter;
@@ -2433,9 +2984,40 @@ check_cmd_line_options(void)
 		welcome_message = xargs.welcome_message;
 }
 
+#ifndef _NO_FZF
+static void
+update_finder_binaries_status(void)
+{
+	char *p = (char *)NULL;
+	if (!(finder_flags & FZF_BIN_OK)) {
+		if ((p = get_cmd_path("fzf"))) {
+			free(p);
+			finder_flags |= FZF_BIN_OK;
+		}
+	}
+
+	if (!(finder_flags & FZY_BIN_OK)) {
+		if ((p = get_cmd_path("fzy"))) {
+			free(p);
+			finder_flags |= FZY_BIN_OK;
+		}
+	}
+
+	if (!(finder_flags & SMENU_BIN_OK)) {
+		if ((p = get_cmd_path("smenu"))) {
+			free(p);
+			finder_flags |= SMENU_BIN_OK;
+		}
+	}
+}
+#endif /* !_NO_FZF */
+
 int
 reload_config(void)
 {
+#ifndef _NO_FZF
+	enum tab_mode tabmode_bk = tabmode;
+#endif /* !_NO_FZF */
 	reset_variables();
 
 	/* Set up config files and options */
@@ -2446,9 +3028,14 @@ reload_config(void)
 	set_sel_file();
 	create_tmp_files();
 
-	/* If some option was set via command line, keep that value
-	 * for any profile */
+	/* If some option was set via command line, keep that value for any profile */
 	check_cmd_line_options();
+
+#ifndef _NO_FZF
+	if (tabmode_bk != tabmode)
+		update_finder_binaries_status();
+	check_completion_mode();
+#endif /* !_NO_FZF */
 
 	/* Free the aliases and prompt_cmds arrays to be allocated again */
 	int i = dirhist_total_index;
@@ -2489,8 +3076,7 @@ reload_config(void)
 	load_tags();
 	load_remotes();
 
-	/* Set the current poistion of the dirhist index to the last
-	 * entry */
+	/* Set the current poistion of the dirhist index to the last entry */
 	dirhist_cur_index = dirhist_total_index - 1;
 
 	dir_changed = 1;

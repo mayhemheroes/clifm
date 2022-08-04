@@ -36,6 +36,7 @@
 #include "init.h"
 #include "navigation.h"
 #include "messages.h"
+#include "misc.h"
 
 static inline void
 free_jump_database(void)
@@ -110,8 +111,10 @@ save_jumpdb(void)
 	|| jump_n == 0)
 		return;
 
-	char *jump_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
-	sprintf(jump_file, "%s/jump.cfm", config_dir);
+//	char *jump_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
+//	sprintf(jump_file, "%s/jump.cfm", config_dir);
+	char *jump_file = (char *)xnmalloc(config_dir_len + 12, sizeof(char));
+	sprintf(jump_file, "%s/jump.clifm", config_dir);
 
 	FILE *fp = fopen(jump_file, "w+");
 	if (!fp) {
@@ -229,12 +232,14 @@ edit_jumpdb(void)
 
 	save_jumpdb();
 
-	char *jump_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
-	sprintf(jump_file, "%s/jump.cfm", config_dir);
+/*	char *jump_file = (char *)xnmalloc(config_dir_len + 10, sizeof(char));
+	sprintf(jump_file, "%s/jump.cfm", config_dir); */
+	char *jump_file = (char *)xnmalloc(config_dir_len + 12, sizeof(char));
+	sprintf(jump_file, "%s/jump.clifm", config_dir);
 
 	struct stat attr;
 	if (stat(jump_file, &attr) == -1) {
-		fprintf(stderr, "%s: %s: %s\n", PROGRAM_NAME, jump_file, strerror(errno));
+		_err(ERR_NO_STORE, NOPRINT_PROMPT, "jump: %s: %s\n", jump_file, strerror(errno));
 		free(jump_file);
 		return EXIT_FAILURE;
 	}
@@ -305,7 +310,7 @@ dirjump(char **args, int mode)
 	 * database together with the corresponding information */
 	if (mode == NO_SUG_JUMP && !args[1] && args[0][1] != 'e') {
 		if (!jump_n) {
-			printf("%s: Database still empty\n", PROGRAM_NAME);
+			printf("jump: Database still empty\n");
 			return EXIT_SUCCESS;
 		}
 
@@ -408,8 +413,7 @@ dirjump(char **args, int mode)
 	case 'l': jump_opt = JLIST; break;
 	case '\0': jump_opt = NONE; break;
 	default:
-		fprintf(stderr, _("%s: '%c': Invalid option\n"), PROGRAM_NAME,
-				args[0][1]);
+		fprintf(stderr, _("jump: '%c': Invalid option\n"), args[0][1]);
 		fprintf(stderr, "%s\n", _(JUMP_USAGE));
 		return EXIT_FAILURE;
 	}
@@ -430,8 +434,7 @@ dirjump(char **args, int mode)
 			int int_order = atoi(args[1]);
 			if (int_order <= 0 || int_order > (int)jump_n) {
 				if (mode == NO_SUG_JUMP) {
-					fprintf(stderr, _("%s: %s: No such order number\n"),
-						PROGRAM_NAME, args[1]);
+					fprintf(stderr, _("jump: %s: No such order number\n"), args[1]);
 				}
 				return EXIT_FAILURE;
 			}
@@ -661,7 +664,7 @@ dirjump(char **args, int mode)
 
 	if (!found) {
 		if (mode == NO_SUG_JUMP)
-			printf(_("%s: jump: No matches found\n"), PROGRAM_NAME);
+			printf(_("jump: No matches found\n"));
 		exit_status = EXIT_FAILURE;
 	} else {
 		if (jump_opt != JLIST) {
